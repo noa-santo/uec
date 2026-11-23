@@ -282,6 +282,17 @@ export function NodeEditor() {
     setEditingId(id);
   };
 
+  const autoArrangeNodes = () => {
+    const patterns = nodes.filter((node) => node.data.kind === "pattern").sort((a, b) => String((a.data as PatternData).alias).localeCompare(String((b.data as PatternData).alias)));
+    const inboxes = nodes.filter((node) => node.data.kind === "inbox").sort((a, b) => String((a.data as InboxData).name).localeCompare(String((b.data as InboxData).name)));
+    const arranged = nodes.map((node) => {
+      if (node.data.kind === "pattern") return { ...node, position: { x: 80, y: 60 + patterns.indexOf(node) * 115 } };
+      return { ...node, position: { x: 520, y: 60 + inboxes.indexOf(node) * 130 } };
+    });
+    setNodes(arranged);
+    persist(arranged, edges);
+  };
+
   const addExactRouteForAddress = (address: string) => {
     const normalized = address.trim().toLowerCase();
     if (!normalized || rules.some((rule) => rule.matchType === "exact" && rule.alias.toLowerCase() === normalized)) return;
@@ -365,8 +376,8 @@ export function NodeEditor() {
       {/* ── toolbar ────────────────────────────────────────────────── */}
       <div className="uec-editor-toolbar">
         <strong>Virtual Inbox Routing</strong>
-        <span>Add nodes, drag connections to create routes. Double-click a node to edit it. Press Delete/Backspace to remove.</span>
-        <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+        <div className="uec-toolbar-actions">
+          <button type="button" onClick={autoArrangeNodes} className="uec-btn-secondary" disabled={!nodes.length}>Auto arrange</button>
           <button type="button" onClick={addPatternNode} className="uec-btn-add-pattern">
             + Pattern
           </button>
@@ -412,7 +423,7 @@ export function NodeEditor() {
                   ))}
                 </select>
               </label>
-              <label>
+              {editMatchType !== "all" && <label>
                 Pattern
                 <input
                   autoFocus
@@ -427,7 +438,7 @@ export function NodeEditor() {
                   onChange={(e) => setEditAlias(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
                 />
-              </label>
+              </label>}
               <label className="uec-checkbox-label">
                 <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
                 Enabled
@@ -475,24 +486,6 @@ export function NodeEditor() {
         </ReactFlow>
       </div>
 
-      {/* ── route list (summary) ─────────────────────────────────────── */}
-      {rules.length > 0 && (
-        <div className="uec-route-list">
-          {rules.map((rule) => (
-            <div className="uec-route-row" key={rule.id}>
-              <div className="uec-route-details">
-                <span className="uec-badge">{rule.matchType || "exact"}</span>
-                <strong>{rule.alias}</strong>
-                <span style={{ color: "#94a3b8" }}>→</span>
-                <span style={{ color: "#34d399", fontWeight: 600 }}>{rule.inbox}</span>
-              </div>
-              <span className={`uec-pill ${rule.enabled ? "active" : ""}`}>
-                {rule.enabled ? "on" : "off"}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

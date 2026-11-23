@@ -119,9 +119,8 @@ export async function fetchGmailEmails(
   const headers = { Authorization: `Bearer ${account.accessToken}` } as const;
   let url = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}`;
   if (pageToken) url += `&pageToken=${pageToken}`;
-  if (onlyOneMonth) {
-    url += `&q=after:${getOneMonthAgoDateString()}`;
-  }
+  const query = ["-in:sent", "-in:drafts", ...(onlyOneMonth ? [`after:${getOneMonthAgoDateString()}`] : [])].join(" ");
+  url += `&q=${encodeURIComponent(query)}`;
 
   // Always refresh the message ID page so newly arrived email appears; message bodies remain locally cached.
   // If no cached list, fetch from API
