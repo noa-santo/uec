@@ -93,7 +93,9 @@ async function getCachedEmailList(accountEmail: string): Promise<{ ids: string[]
 
 async function setCachedEmailList(accountEmail: string, ids: string[], nextPageToken?: string): Promise<void> {
   try {
-    const data = JSON.stringify({ ids, nextPageToken });
+    const previous = await getCachedEmailList(accountEmail);
+    const mergedIds = [...new Set([...(previous?.ids || []), ...ids])];
+    const data = JSON.stringify({ ids: mergedIds, nextPageToken });
     if (Platform.OS === "web") {
       localStorage.setItem(`uec.emailList.${accountEmail}`, data);
     } else {
@@ -191,7 +193,7 @@ export async function fetchGmailEmails(
   if (ids.length === 0) return { emails: [], nextPageToken, reachedOneMonthAgo: true };
 
   // Cache the list of IDs and nextPageToken
-  if (account.email && !pageToken) {
+  if (account.email) {
     await setCachedEmailList(account.email, ids, nextPageToken);
   }
 
@@ -269,8 +271,15 @@ export async function fetchAllEmailsFromAccounts(accounts: MailAccount[]): Promi
   const all: Email[] = [];
   for (const acc of gmailAccounts) {
     try {
-      const items = await fetchGmailEmailsOneMonth(acc as GmailAccount);
-      all.push(...items);
+      const gmailAccount = acc as GmailAccount;
+      const firstPage = await fetchGmailEmails(gmailAccount, 50, undefined, true);
+      all.push(...firstPage.emails);
+      // Fetch older pages without blocking the initial inbox render. Messages and IDs are cached as pages arrive.
+      if (firstPage.nextPageToken) {
+        void fetchOlderGmailEmails(gmailAccount, firstPage.nextPageToken, 20).catch((error) =>
+          console.warn("Background Gmail sync stopped", gmailAccount.email, error)
+        );
+      }
     } catch (e) {
       console.warn("Failed to fetch from account", acc.id, e);
     }
