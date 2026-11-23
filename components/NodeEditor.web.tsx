@@ -66,7 +66,7 @@ function InboxNode({ id, data }: NodeProps<Node<InboxData>>) {
   return (
     <div className="uec-node uec-node-inbox">
       <Handle type="target" position={Position.Left} id="in" />
-      <div className="uec-node-label">📥 {d.name || <em style={{ color: "#a3e6cb" }}>unnamed inbox</em>}</div>
+      <div className="uec-node-label">{d.name || <em style={{ color: "#a3e6cb" }}>unnamed inbox</em>}</div>
     </div>
   );
 }

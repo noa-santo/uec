@@ -1,8 +1,8 @@
 import { FlatList, Pressable, Text, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Email, groupByToAddress, saveUnresolvedAddresses } from "@/lib/email_utils";
-import { getAccounts, MailAccount } from "@/lib/accounts";
-import { fetchAllEmailsFromAccounts } from "@/lib/gmail";
+import { getAccounts, GmailAccount, MailAccount } from "@/lib/accounts";
+import { fetchAllEmailsFromAccounts, fetchOlderGmailEmails } from "@/lib/gmail";
 import { loadAliasRules, testRuleMatch } from "@/lib/alias_rules";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
@@ -52,6 +52,8 @@ export default function Index() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [aliasRules, setAliasRules] = useState<Awaited<ReturnType<typeof loadAliasRules>>>([]);
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [hasOlder, setHasOlder] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -59,7 +61,14 @@ export default function Index() {
         setLoading(true);
         const [accs, rules] = await Promise.all([getAccounts(), loadAliasRules()]);
         setAccounts(accs);
-        const emails = await fetchAllEmailsFromAccounts(accs);
+        const emails = await fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
+          setOlderLoading(syncing);
+          setHasOlder(more);
+          setItems((current) => {
+            const ids = new Set(current.map((email) => email.id));
+            return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+          });
+        });
         setAliasRules(rules);
         setItems(emails);
         const unresolved = emails.map((email) => email.to).filter((address) => !rules.some((rule) => testRuleMatch(address, rule)));
@@ -100,6 +109,25 @@ export default function Index() {
   const selectedMessage = useMemo(() => messages.find((m) => m.id === selectedMessageId) ?? null, [messages, selectedMessageId]);
 
   const hasOnlyManualAccounts = accounts.length > 0 && accounts.every((a) => a.type === "manual");
+  const loadOlderManually = async () => {
+    const gmail = accounts.find((account): account is GmailAccount => account.type === "gmail");
+    if (!gmail || olderLoading || !hasOlder) return;
+    setOlderLoading(true);
+    try {
+      const page = await fetchOlderGmailEmails(gmail, undefined, 1, (pageEmails, more) => {
+        setHasOlder(more);
+        setItems((current) => {
+          const ids = new Set(current.map((email) => email.id));
+          return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+        });
+      });
+      if (!page.length) setHasOlder(false);
+    } catch (e: any) {
+      setError(`Could not load older email: ${String(e?.message || e)}`);
+    } finally {
+      setOlderLoading(false);
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: "#000", margin: 10 }}>
@@ -143,6 +171,7 @@ export default function Index() {
             <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
               <TypewriterText text="Virtual Inboxes" startDelayMs={200} pauseAtEndMs={0} />
             </Heading>
+            {!!accounts.some((account) => account.type === "gmail") && <Pressable disabled={olderLoading || !hasOlder} onPress={loadOlderManually} style={{ padding: 9, borderWidth: 1, borderColor: "#333", borderRadius: 8, marginBottom: 8, backgroundColor: "#101010", opacity: olderLoading || !hasOlder ? 0.55 : 1 }}><T style={{ textAlign: "center", fontWeight: "600" }}>{olderLoading ? "Syncing older messages…" : hasOlder ? "Load older messages" : "All available messages loaded"}</T></Pressable>}
             <FlatList
               data={addresses}
               keyExtractor={(addr) => addr}

@@ -81,10 +81,10 @@ async function setCachedEmail(id: string, email: Email): Promise<void> {
 async function getCachedEmailList(accountEmail: string): Promise<{ ids: string[]; nextPageToken?: string } | undefined> {
   try {
     if (Platform.OS === "web") {
-      const raw = localStorage.getItem(`uec.emailList.${accountEmail}`);
+      const raw = localStorage.getItem(`uec.emailList.v2.${accountEmail}`);
       if (raw) return JSON.parse(raw);
     } else {
-      const raw = await AsyncStorage.getItem(`uec.emailList.${accountEmail}`);
+      const raw = await AsyncStorage.getItem(`uec.emailList.v2.${accountEmail}`);
       if (raw) return JSON.parse(raw);
     }
   } catch {}
@@ -97,9 +97,9 @@ async function setCachedEmailList(accountEmail: string, ids: string[], nextPageT
     const mergedIds = [...new Set([...(previous?.ids || []), ...ids])];
     const data = JSON.stringify({ ids: mergedIds, nextPageToken });
     if (Platform.OS === "web") {
-      localStorage.setItem(`uec.emailList.${accountEmail}`, data);
+      localStorage.setItem(`uec.emailList.v2.${accountEmail}`, data);
     } else {
-      await AsyncStorage.setItem(`uec.emailList.${accountEmail}`, data);
+      await AsyncStorage.setItem(`uec.emailList.v2.${accountEmail}`, data);
     }
   } catch {}
 }
@@ -123,54 +123,7 @@ export async function fetchGmailEmails(
     url += `&q=after:${getOneMonthAgoDateString()}`;
   }
 
-  // Try to use cached email list first
-  if (account.email) {
-    const cachedList = await getCachedEmailList(account.email);
-    if (cachedList && !pageToken) {
-      // Use cached IDs to get emails from cache
-      const emailPromises = cachedList.ids.map(async (id) => {
-        let cached = await getCachedEmail(id);
-        if (cached) {
-          gmailEmailCache[id] = cached;
-          return cached;
-        }
-        // If not cached, fallback to fetch
-        const msgRes = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
-          { headers }
-        );
-        if (!msgRes.ok) return undefined;
-        const msg = await msgRes.json();
-        const hdrs: { name: string; value: string }[] = msg.payload?.headers || [];
-        const from = getHeader(hdrs, "From") || "";
-        const to = getHeader(hdrs, "To") || (account.email || "");
-        const subject = getHeader(hdrs, "Subject") || "(no subject)";
-        const dateHeader = getHeader(hdrs, "Date");
-        const date = dateHeader ? new Date(dateHeader).toISOString() : new Date(msg.internalDate ? Number(msg.internalDate) : Date.now()).toISOString();
-        const snippet: string = msg.snippet || "";
-        const bodyText = extractTextFromPayload(msg.payload);
-        const bodyHtml = extractHtmlFromPayload(msg.payload);
-        const body = bodyText || snippet;
-        const email: Email = {
-          id,
-          to,
-          from,
-          subject,
-          snippet,
-          date,
-          body,
-          bodyText: bodyText ?? undefined,
-          bodyHtml: bodyHtml ?? undefined
-        };
-        await setCachedEmail(id, email);
-        gmailEmailCache[id] = email;
-        return email;
-      });
-      const emails = (await Promise.all(emailPromises)).filter(Boolean) as Email[];
-      return { emails, nextPageToken: cachedList.nextPageToken };
-    }
-  }
-
+  // Always refresh the message ID page so newly arrived email appears; message bodies remain locally cached.
   // If no cached list, fetch from API
   const listRes = await fetch(url, { headers });
   if (!listRes.ok) {
@@ -255,30 +208,34 @@ export async function fetchGmailEmailsOneMonth(account: GmailAccount, maxResults
   return allEmails;
 }
 
-export async function fetchOlderGmailEmails(account: GmailAccount, firstPageToken?: string, maxPages = 10): Promise<Email[]> {
+export async function fetchOlderGmailEmails(account: GmailAccount, firstPageToken?: string, maxPages = 10, onPage?: (emails: Email[], hasMore: boolean, syncing: boolean) => void): Promise<Email[]> {
   const collected: Email[] = [];
-  let token = firstPageToken;
+  const cachedList = account.email ? await getCachedEmailList(account.email) : undefined;
+  let token = firstPageToken || cachedList?.nextPageToken;
   for (let page = 0; token && page < maxPages; page++) {
     const result = await fetchGmailEmails(account, 50, token, false);
     collected.push(...result.emails);
     token = result.nextPageToken;
+    onPage?.(result.emails, Boolean(token), Boolean(token) && page + 1 < maxPages);
   }
   return collected;
 }
 
-export async function fetchAllEmailsFromAccounts(accounts: MailAccount[]): Promise<Email[]> {
+export async function fetchAllEmailsFromAccounts(accounts: MailAccount[], onOlderPage?: (account: GmailAccount, emails: Email[], hasMore: boolean, syncing: boolean) => void): Promise<Email[]> {
   const gmailAccounts = accounts.filter((a) => a.type === "gmail");
   const all: Email[] = [];
   for (const acc of gmailAccounts) {
     try {
       const gmailAccount = acc as GmailAccount;
-      const firstPage = await fetchGmailEmails(gmailAccount, 50, undefined, true);
+      const firstPage = await fetchGmailEmails(gmailAccount, 50, undefined, false);
       all.push(...firstPage.emails);
+      onOlderPage?.(gmailAccount, [], Boolean(firstPage.nextPageToken), Boolean(firstPage.nextPageToken));
       // Fetch older pages without blocking the initial inbox render. Messages and IDs are cached as pages arrive.
       if (firstPage.nextPageToken) {
-        void fetchOlderGmailEmails(gmailAccount, firstPage.nextPageToken, 20).catch((error) =>
-          console.warn("Background Gmail sync stopped", gmailAccount.email, error)
-        );
+        void fetchOlderGmailEmails(gmailAccount, firstPage.nextPageToken, 20, (pageEmails, hasMore, syncing) => onOlderPage?.(gmailAccount, pageEmails, hasMore, syncing)).catch((error) => {
+          onOlderPage?.(gmailAccount, [], true, false);
+          console.warn("Background Gmail sync stopped", gmailAccount.email, error);
+        });
       }
     } catch (e) {
       console.warn("Failed to fetch from account", acc.id, e);
