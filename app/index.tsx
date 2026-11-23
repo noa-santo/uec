@@ -1,7 +1,7 @@
 import { FlatList, Pressable, Text, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Email, groupByToAddress } from "@/lib/email_utils";
-import { getAccounts } from "@/lib/accounts";
+import { getAccounts, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts } from "@/lib/gmail";
 import { loadAliasRules } from "@/lib/alias_rules";
 import { HtmlViewer } from "@/components/HtmlViewer";
@@ -47,6 +47,7 @@ function Wireframe() {
 }
 
 export default function Index() {
+  const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [items, setItems] = useState<Email[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +58,7 @@ export default function Index() {
       try {
         setLoading(true);
         const [accs, rules] = await Promise.all([getAccounts(), loadAliasRules()]);
+        setAccounts(accs);
         const emails = await fetchAllEmailsFromAccounts(accs);
         setAliasRules(rules);
         setItems(emails);
@@ -95,6 +97,8 @@ export default function Index() {
   const messages = useMemo(() => (selectedAddress ? groups[selectedAddress].slice().sort((a, b) => b.date.localeCompare(a.date)) : []), [groups, selectedAddress]);
   const selectedMessage = useMemo(() => messages.find((m) => m.id === selectedMessageId) ?? null, [messages, selectedMessageId]);
 
+  const hasOnlyManualAccounts = accounts.length > 0 && accounts.every((a) => a.type === "manual");
+
   return (
     <View style={{ flex: 1, backgroundColor: "#000", margin: 10 }}>
       {loading && (
@@ -116,8 +120,19 @@ export default function Index() {
         </View>
       )}
       {!loading && !error && items.length === 0 && (
-        <View style={{ padding: 8, backgroundColor: "#0a0a0a", borderRadius: 8, borderWidth: 1, borderColor: "#222", marginBottom: 8 }}>
-          <T>No emails to show yet. Connect your account via the Accounts button in the header.</T>
+        <View style={{ padding: 16, backgroundColor: "#0a0a0a", borderRadius: 8, borderWidth: 1, borderColor: "#222", marginBottom: 8 }}>
+          {accounts.length === 0 ? (
+            <T>No accounts configured yet. Add your account via the Accounts button in the header.</T>
+          ) : hasOnlyManualAccounts ? (
+            <View>
+              <T style={{ fontWeight: "700", marginBottom: 4 }}>Manual IMAP/POP Account Configured</T>
+              <T style={{ color: "#aaa", lineHeight: 20 }}>
+                {accounts.length} manual account(s) saved ({accounts.map((a) => (a.type === "manual" ? a.incoming.username : "")).filter(Boolean).join(", ")}). Direct TCP/TLS socket connections for IMAP/POP3 are not supported in React Native/Web without a native TCP proxy or backend sync daemon. Currently, live fetching is implemented for Gmail accounts via REST API.
+              </T>
+            </View>
+          ) : (
+            <T>No emails found in connected accounts.</T>
+          )}
         </View>
       )}
       {!loading && (

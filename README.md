@@ -24,18 +24,31 @@ Primary feature in this prototype: virtual inboxes grouped by the address an ema
    - Linux desktop: `pnpm run tauri:cli dev` (requires GTK/WebKitGTK; Nix users can use the CI shell or the shell example below).
 
 The app uses file‑based routing (expo-router). Main screens:
-- Virtual Inboxes (app/index.tsx)
-- Accounts (add Gmail or manual IMAP/POP/SMTP) (app/accounts.tsx)
-- Inbox by address (app/inbox/[address].tsx)
-- Message detail (app/mail/[id].tsx)
-- Alias Node Editor (app/editor/index.tsx)
+- Virtual Inboxes (`app/index.tsx`)
+- Accounts (add Gmail or manual IMAP/POP) (`app/accounts.tsx`)
+- Inbox by address (`app/inbox/[address].tsx`)
+- Message detail (`app/mail/[id].tsx`)
+- Alias Node Editor (`app/editor/index.tsx`)
 
-## Accounts: Gmail and Manual IMAP/POP/SMTP
+## Accounts: Gmail & Manual IMAP/POP
 
-The Accounts screen supports Gmail OAuth and manual incoming (IMAP/POP3) plus outgoing (SMTP) server settings. Gmail sync uses the Gmail API; manual server settings are stored using expo-secure-store on native platforms and AsyncStorage on web. The manual transport itself still requires a backend or native socket implementation.
+- **Gmail**: Syncs emails via the Gmail REST API using OAuth2 client IDs configured in `.env`.
+- **Manual (IMAP/POP)**: Stores credentials securely in `expo-secure-store` / `AsyncStorage`. Note: Direct TCP/TLS sockets for IMAP/POP cannot be opened in browser/React Native sandboxes without a backend daemon or native socket layer. The UI clearly displays configured manual accounts.
+
+## Virtual Inbox Routing & Pattern Matching
+
+The Alias Node Editor supports flexible routing types:
+- **Exact**: Matches exact email address (e.g. `billing@domain.com` → `Finance`).
+- **Domain**: Matches full domain (e.g. `@github.com` or `company.org` → `Work`).
+- **Prefix**: Matches address prefixes before `+` tags (e.g. `newsletter` matches `newsletter+tech@...` → `News`).
+- **Contains**: Substring matching across recipient addresses.
+- **Regex**: Full regular expression matching (e.g. `^app-[0-9]+@.*` → `CI/CD`).
+
+An interactive test resolver is built directly into the node editor so you can verify addresses instantly.
 
 ## Scripts
 - `pnpm start` — start the dev server
+- `pnpm test` — run unit test suite
 - `pnpm run web` — start the web target directly
 - `pnpm run android` — start the Android target directly
 - `pnpm run tauri:cli dev` — start the native Linux desktop shell

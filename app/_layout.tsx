@@ -3,6 +3,14 @@ import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
 import { Platform, Pressable, Text } from "react-native";
 import TypewriterText from "../components/TypewriterText";
+import * as WebBrowser from "expo-web-browser";
+
+// Must run at root level on web so the OAuth popup can close itself.
+// The redirect lands at "/" (not "/accounts"), so maybeCompleteAuthSession
+// must execute on every page load, not just in accounts.tsx.
+if (Platform.OS === "web") {
+  WebBrowser.maybeCompleteAuthSession({ skipRedirectCheck: true });
+}
 
 export default function RootLayout() {
   const [loaded] = useFonts({

@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Alert, FlatList, Pressable, ScrollView, Text, TextInput, View, Modal, Platform } from "react-native";
 import { FadeSlideIn, ScaleIn } from "@/components/animations";
 import * as WebBrowser from "expo-web-browser";
-import * as AuthSession from "expo-auth-session";
+
 import * as Google from "expo-auth-session/providers/google";
 import { addAccount, getAccounts, makeId, MailAccount, ManualAccount, verifyGmailAccessToken, removeAccount } from "@/lib/accounts";
 
-WebBrowser.maybeCompleteAuthSession();
+// maybeCompleteAuthSession is now called in _layout.tsx at root level.
+// Calling it here too (as a no-op on non-popup pages) is harmless but redundant.
 
 function Heading(props: any) {
   return (
@@ -63,13 +64,10 @@ export default function AccountsScreen() {
   const [inPass, setInPass] = useState("");
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "missing-ios-client-id",
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "missing-android-client-id",
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "missing-web-client-id",
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     scopes: ["openid", "email", "profile", "https://mail.google.com/"],
-    redirectUri: AuthSession.makeRedirectUri({ scheme: "uec" }),
-    responseType: AuthSession.ResponseType.Token,
-    usePKCE: true,
   });
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -82,7 +80,7 @@ export default function AccountsScreen() {
 
   useEffect(() => {
     if (response?.type === "success") {
-      const accessToken = response.authentication?.accessToken;
+      const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
       const expiresIn = response.authentication?.expiresIn;
       if (accessToken) {
         (async () => {
@@ -241,7 +239,7 @@ export default function AccountsScreen() {
                       setPendingRemoveId(item.id);
                       setModalVisible(true);
                     }}
-                    style={({ pressed }) => ({
+                    style={{
                       marginLeft: 10,
                       width: 36,
                       height: 36,
@@ -251,7 +249,7 @@ export default function AccountsScreen() {
                       borderRadius: 0,
                       borderWidth: 0,
                       padding: 0,
-                    })}
+                    }}
                     accessibilityLabel="Remove account"
                   >
                     <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 20, textAlign: "center", fontFamily: Platform.OS === "web" ? "Bitcount, system-ui, sans-serif" : undefined }}>×</Text>

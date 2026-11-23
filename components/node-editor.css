@@ -1,6 +1,219 @@
-.uec-editor { display:flex; flex-direction:column; height:100%; min-height:560px; background:#070b12; color:#e6edf7; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
-.uec-editor-toolbar,.uec-editor-form,.uec-route-list { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:12px 16px; }
-.uec-editor-toolbar { border-bottom:1px solid #263244; } .uec-editor-toolbar span,.uec-editor-form span { color:#93a4ba; font-size:13px; }
-.uec-editor input { background:#111a28; border:1px solid #34445b; color:#f6f8fb; border-radius:6px; padding:9px 10px; font:inherit; } .uec-editor button { background:#2563eb; color:#fff; border:0; border-radius:6px; padding:9px 12px; font:inherit; cursor:pointer; } .uec-editor button:hover { background:#3b82f6; }
-.uec-editor-canvas { flex:1; min-height:360px; } .uec-node { min-width:170px; padding:12px; border:1px solid #6b7d96; border-radius:8px; background:#162235; color:#f6f8fb; font:600 13px system-ui,-apple-system,"Segoe UI",sans-serif; text-align:center; } .uec-node-inbox { background:#173b34; border-color:#43b58b; } .uec-node-alias { border-color:#6ea8fe; }
-.uec-route-row { display:flex; justify-content:space-between; width:100%; max-width:620px; padding:8px 0; border-bottom:1px solid #263244; } .uec-route-row button { background:#334155; } .uec-editor-loading { padding:24px; color:#93a4ba; font-family:system-ui,sans-serif; }
+/* ── layout ───────────────────────────────────────────────────────────────── */
+.uec-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 560px;
+  background: #070b12;
+  color: #e6edf7;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+.uec-editor-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #1e293b;
+  background: #0b1322;
+  font-size: 13px;
+}
+.uec-editor-toolbar strong { font-size: 14px; }
+.uec-editor-toolbar span { color: #94a3b8; }
+.uec-status { color: #34d399; font-weight: 600; }
+
+/* ── tester bar ──────────────────────────────────────────────────────────── */
+.uec-tester-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+.uec-tester-bar span { color: #94a3b8; }
+.uec-tester-bar input { flex: 1; min-width: 200px; max-width: 340px; }
+.uec-tester-bar button { background: #334155; }
+.uec-tester-bar button:hover { background: #475569; }
+.uec-test-match { color: #38bdf8; }
+
+/* ── inline editor panel ─────────────────────────────────────────────────── */
+.uec-inline-editor {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #0f1e2e;
+  border-bottom: 1px solid #1e3a5f;
+}
+.uec-inline-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.uec-inline-editor label input,
+.uec-inline-editor label select {
+  min-width: 180px;
+}
+.uec-checkbox-label {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 6px !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-size: 13px !important;
+  color: #e6edf7 !important;
+  cursor: pointer;
+}
+
+/* ── shared form controls (inputs, selects, buttons) ──────────────────────── */
+.uec-editor input,
+.uec-editor select {
+  background: #111a28;
+  border: 1px solid #334155;
+  color: #f8fafc;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.uec-editor input:focus,
+.uec-editor select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.25);
+}
+.uec-editor select { cursor: pointer; }
+
+.uec-editor button {
+  background: #2563eb;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.uec-editor button:hover { background: #3b82f6; }
+
+.uec-btn-add-pattern { background: #1d4ed8; }
+.uec-btn-add-inbox   { background: #065f46; }
+.uec-btn-add-inbox:hover { background: #047857; }
+.uec-btn-cancel { background: #334155; }
+.uec-btn-cancel:hover { background: #475569; }
+
+/* ── canvas ──────────────────────────────────────────────────────────────── */
+.uec-editor-canvas {
+  flex: 1;
+  min-height: 380px;
+  background: #090d16;
+}
+
+/* ── nodes ───────────────────────────────────────────────────────────────── */
+.uec-node {
+  min-width: 170px;
+  max-width: 260px;
+  padding: 10px 14px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  background: #1e293b;
+  color: #f8fafc;
+  /* use system fonts everywhere in the graph — no decorative font */
+  font: 600 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-align: center;
+  position: relative;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.35);
+  cursor: grab;
+}
+.uec-node:active { cursor: grabbing; }
+.uec-node-disabled { opacity: 0.45; border-style: dashed; }
+.uec-node-inbox   { background: #064e3b; border-color: #10b981; }
+.uec-node-pattern { border-color: #38bdf8; }
+
+.uec-node-label {
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.uec-badge {
+  display: inline-block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #0284c7;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── route list ──────────────────────────────────────────────────────────── */
+.uec-route-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid #1e293b;
+  padding: 8px 16px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.uec-route-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #0f172a;
+  border-radius: 6px;
+  border: 1px solid #1e293b;
+}
+.uec-route-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.uec-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1e293b;
+  color: #64748b;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.uec-pill.active { background: #064e3b; color: #6ee7b7; }
+
+/* ── loading ─────────────────────────────────────────────────────────────── */
+.uec-editor-loading {
+  padding: 24px;
+  color: #94a3b8;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── react-flow overrides: enforce system font everywhere in the graph ───── */
+.react-flow__node,
+.react-flow__edge-label,
+.react-flow__controls-button,
+.react-flow__minimap-node,
+.react-flow .nodrag {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+}
