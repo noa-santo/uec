@@ -5,7 +5,9 @@ import * as WebBrowser from "expo-web-browser";
 import { ResponseType } from "expo-auth-session";
 
 import * as Google from "expo-auth-session/providers/google";
-import { addAccount, getAccounts, makeId, MailAccount, ManualAccount, verifyGmailAccessToken, removeAccount } from "@/lib/accounts";
+import { addAccount, getAccounts, googleOAuthConfig, makeId, MailAccount, ManualAccount, verifyGmailAccessToken, removeAccount } from "@/lib/accounts";
+import { notifySettingsChanged } from "@/lib/settings_events";
+import { loadGoogleClientSecret, saveGoogleClientSecret } from "@/lib/google_auth";
 
 // maybeCompleteAuthSession is now called in _layout.tsx at root level.
 // Calling it here too (as a no-op on non-popup pages) is harmless but redundant.
@@ -64,10 +66,13 @@ export default function AccountsScreen() {
   const [inUser, setInUser] = useState("");
   const [inPass, setInPass] = useState("");
 
+  const [clientSecret, setClientSecret] = useState("");
+  const oauthConfig = googleOAuthConfig();
   const [request, response, promptAsync] = Google.useAuthRequest({
     iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+    clientSecret: oauthConfig.clientSecret || clientSecret.trim() || undefined,
     responseType: ResponseType.Code,
     extraParams: { access_type: "offline", prompt: "consent" },
     scopes: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"],
@@ -76,33 +81,54 @@ export default function AccountsScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const gmailConfigured = Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
+  const [reconnectId, setReconnectId] = useState<string | null>(null);
 
   useEffect(() => {
     getAccounts().then(setAccounts);
+    loadGoogleClientSecret().then(setClientSecret);
   }, []);
 
   useEffect(() => {
-    if (response?.type === "success") {
-      const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
-      const expiresIn = response.authentication?.expiresIn;
-      if (accessToken) {
-        (async () => {
-          const verify = await verifyGmailAccessToken(accessToken);
-          if (!verify.ok || !verify.email) {
-            Alert.alert("Gmail sign-in failed", `Could not verify your Google account${verify.error ? ` (${verify.error})` : ""}. Please try connecting again.`);
-            return;
-          }
-          const id = makeId("gmail");
-          await addAccount({ id, type: "gmail", accessToken, refreshToken: response.authentication?.refreshToken ?? response.params?.refresh_token, expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined, email: verify.email });
-          const list = await getAccounts();
-          setAccounts(list);
-          Alert.alert("Gmail account added", `Signed in as ${verify.email}`);
-        })();
-      } else {
-        Alert.alert("Gmail sign-in failed", "No access token returned.");
+    if (!response) return;
+    if (response.type !== "success") {
+      if (response.type === "error") {
+        const detail = response.error?.message || response.params?.error_description || response.params?.error || "unknown error";
+        const hint = /client_secret|invalid_client/i.test(detail)
+          ? " Paste your Web client secret below and try again, or use a Google Desktop app client ID (PKCE, no secret)."
+          : "";
+        Alert.alert("Gmail sign-in failed", `${detail}.${hint}`);
       }
+      setReconnectId(null);
+      return;
     }
-  }, [response]);
+    const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
+    const refreshToken = response.authentication?.refreshToken ?? response.params?.refresh_token;
+    const expiresIn = Number(response.authentication?.expiresIn ?? response.params?.expires_in ?? 3600);
+    if (!accessToken) {
+      Alert.alert("Gmail sign-in failed", "No access token returned.");
+      setReconnectId(null);
+      return;
+    }
+    (async () => {
+      const verify = await verifyGmailAccessToken(accessToken);
+      if (!verify.ok || !verify.email) {
+        Alert.alert("Gmail sign-in failed", `Could not verify your Google account${verify.error ? ` (${verify.error})` : ""}. Please try connecting again.`);
+        setReconnectId(null);
+        return;
+      }
+      if (reconnectId) await removeAccount(reconnectId);
+      await addAccount({ id: makeId("gmail"), type: "gmail", accessToken, refreshToken, expiresAt: Date.now() + expiresIn * 1000, email: verify.email });
+      setAccounts(await getAccounts());
+      notifySettingsChanged();
+      setReconnectId(null);
+      Alert.alert(
+        refreshToken ? "Gmail account added" : "Gmail connected without offline access",
+        refreshToken
+          ? `Signed in as ${verify.email}. Sessions will renew automatically.`
+          : `Signed in as ${verify.email}, but Google did not return a refresh token. Access will expire in about an hour; use a Desktop app client ID with offline access.`
+      );
+    })();
+  }, [response, reconnectId]);
 
   const addManual = async () => {
     const id = makeId("manual");
@@ -120,6 +146,7 @@ export default function AccountsScreen() {
       },
     };
     await addAccount(manual);
+    notifySettingsChanged();
     const list = await getAccounts();
     setAccounts(list);
     setShowManual(false);
@@ -129,6 +156,7 @@ export default function AccountsScreen() {
   const handleRemove = async () => {
     if (pendingRemoveId) {
       await removeAccount(pendingRemoveId);
+      notifySettingsChanged();
       const list = await getAccounts();
       setAccounts(list);
       setPendingRemoveId(null);
@@ -156,6 +184,33 @@ export default function AccountsScreen() {
           <T>Add Gmail account</T>
         </Pressable>
         {!gmailConfigured && <T style={{ color: "#f0ad4e", alignSelf: "center" }}>Set Google client IDs in .env to enable Gmail.</T>}
+        <T style={{ flexBasis: "100%", color: "#888", fontSize: 12 }}>
+          For Tauri/web use a Google “Desktop app” OAuth client ID with PKCE (no secret). A Web application client needs the secret entered below. Offline access keeps sessions valid after the first hour.
+        </T>
+        {oauthConfig.platform === "web" && process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID && !oauthConfig.clientSecret && !clientSecret.trim() && (
+          <T style={{ flexBasis: "100%", color: "#f0ad4e", fontSize: 12 }}>
+            A Web client ID is configured but no client secret is set — sign-in will fail until you enter it below.
+          </T>
+        )}
+
+        <View style={{ flexBasis: "100%", marginTop: 4 }}>
+          <LabeledInput
+            label="Google Web client secret (only for Web application clients)"
+            value={clientSecret}
+            onChangeText={setClientSecret}
+            placeholder="Paste client secret, or leave empty for Desktop app clients"
+            secureTextEntry
+          />
+          <Pressable
+            onPress={async () => {
+              await saveGoogleClientSecret(clientSecret);
+              Alert.alert("Saved", clientSecret.trim() ? "Google client secret stored on this device." : "Google client secret removed.");
+            }}
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: "#333", borderRadius: 6, alignSelf: "flex-start" }}
+          >
+            <T style={{ fontSize: 12 }}>Save client secret</T>
+          </Pressable>
+        </View>
 
         <Pressable
           onPress={() => setShowManual((s) => !s)}
@@ -235,12 +290,27 @@ export default function AccountsScreen() {
                   <View style={{ flex: 1 }}>
                     <T style={{ fontWeight: "700" }}>{item.type === "gmail" ? `Gmail${item.email ? `: ${item.email}` : ""}` : item.type === "manual" ? item.displayName || "Manual account" : "Account"}</T>
                     {item.type === "gmail" && (
-                      <T style={{ color: "#bbb", marginTop: 4 }}>Access token stored. Expires at: {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "unknown"}</T>
+                      <View>
+                        <T style={{ color: "#bbb", marginTop: 4 }}>Access token stored. Expires at: {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "unknown"}</T>
+                        <T style={{ color: item.refreshToken ? "#8ab4f8" : "#f0ad4e", marginTop: 2, fontSize: 12 }}>
+                          {item.refreshToken ? "Offline refresh token stored — renews automatically." : "No refresh token — session expires in about an hour. Use Reconnect."}
+                        </T>
+                      </View>
                     )}
                     {item.type === "manual" && (
                       <T style={{ color: "#bbb", marginTop: 4 }}>{item.incoming.protocol.toUpperCase()} {item.incoming.username}@{item.incoming.host}</T>
                     )}
                   </View>
+                  {item.type === "gmail" && (
+                    <Pressable
+                      onPress={() => { setReconnectId(item.id); promptAsync(); }}
+                      disabled={!request}
+                      style={{ marginLeft: 10, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: "#333", borderRadius: 6 }}
+                      accessibilityLabel="Reconnect Gmail account"
+                    >
+                      <T style={{ fontSize: 12 }}>Reconnect</T>
+                    </Pressable>
+                  )}
                   <Pressable
                     onPress={() => {
                       setPendingRemoveId(item.id);

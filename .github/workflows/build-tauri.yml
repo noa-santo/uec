@@ -1,4 +1,4 @@
-name: Build Tauri Desktop App
+name: Build UEC for NixOS
 
 on:
   push:
@@ -17,58 +17,15 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v25
 
-      - name: Set NIX_PATH
-        run: echo "NIX_PATH=nixpkgs=$(nix eval --raw nixpkgs#path)" >> $GITHUB_ENV
+      - name: Build NixOS package
+        # npm and cargo downloads happen during the build, so allow networking.
+        run: nix --extra-experimental-features 'nix-command flakes' build .#uec --option sandbox false --show-trace
 
-      - name: Reinstall CA certificates
-        run: |
-          sudo apt-get update
-          sudo apt-get install --reinstall -y ca-certificates
-          sudo update-ca-certificates -f
+      - name: Archive build result
+        run: tar -czf uec-nixos.tar.gz -C result .
 
-      - name: Build in Nix shell
-        env:
-          NIX_PATH: ${{ env.NIX_PATH }}
-          NO_STRIP: "true"
-        run: |
-          cat > shell.nix <<'EOF'
-          let
-            pkgs = import <nixpkgs> { };
-          in
-          pkgs.mkShell {
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-              gobject-introspection
-              rustc
-              cargo
-              nodejs
-              pnpm
-              cargo-tauri
-              patchelf
-              glibc
-              fuse
-            ];
-            buildInputs = with pkgs; [
-              at-spi2-atk
-              atkmm
-              cairo
-              gdk-pixbuf
-              glib
-              gtk3
-              harfbuzz
-              librsvg
-              libsoup_3
-              pango
-              webkitgtk_4_1
-              openssl
-            ];
-          }
-          EOF
-
-          nix-shell shell.nix --run 'pnpm install --frozen-lockfile && cargo tauri build --verbose'
-
-      - name: Upload Tauri build artifacts
+      - name: Upload NixOS build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-dist
-          path: src-tauri/target/release/
+          name: uec-nixos
+          path: uec-nixos.tar.gz

@@ -1,13 +1,21 @@
 import { FlatList, Pressable, Text, TextInput, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
-import { useEffect, useMemo, useState } from "react";
-import { Email, groupByToAddress, saveUnresolvedAddresses } from "@/lib/email_utils";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { Email, groupByToAddress, saveUnresolvedAddresses, unresolvedAddressesFromEmails } from "@/lib/email_utils";
 import { getAccounts, GmailAccount, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts, fetchOlderGmailEmails } from "@/lib/gmail";
-import { loadAliasRules, testRuleMatch } from "@/lib/alias_rules";
-import { InboxFolder, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
+import { loadAliasRules } from "@/lib/alias_rules";
+import { InboxFolder, folderInboxNames, folderMessages, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
+import { DEFAULT_INBOX_LAYOUT, folderPinKey, inboxPinKey, InboxLayout, loadInboxLayout, saveInboxLayout } from "@/lib/ui_layout";
+import { subscribeToSettings } from "@/lib/settings_events";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
+
+type InboxSort = "name" | "count" | "newest";
+type NavItem =
+  | { type: "folder"; id: string; name: string; inboxes: string[]; count: number; pinned: boolean; key: string }
+  | { type: "inbox"; address: string; folderId?: string; pinned: boolean; key: string };
 
 function Heading(props: any) {
   return (
@@ -47,6 +55,17 @@ function Wireframe() {
   );
 }
 
+/** Web-only drag handle. Native layouts use the collapse buttons instead. */
+function ColumnResizer({ onResize }: { onResize: (event: any) => void }) {
+  if (Platform.OS !== "web") return null;
+  return (
+    <View
+      style={{ width: 6, backgroundColor: "#111", cursor: "col-resize" } as any}
+      {...({ onMouseDown: onResize } as any)}
+    />
+  );
+}
+
 export default function Index() {
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [items, setItems] = useState<Email[]>([]);
@@ -58,87 +77,227 @@ export default function Index() {
   const [olderLoading, setOlderLoading] = useState(false);
   const [hasOlder, setHasOlder] = useState(true);
 
-  useEffect(() => { loadInboxFolders().then((saved) => { setFolders(saved); setCollapsedFolders(saved.filter((folder) => folder.collapsed).map((folder) => folder.id)); }); }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const [accs, rules] = await Promise.all([getAccounts(), loadAliasRules()]);
-        setAccounts(accs);
-        const emails = await fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
-          setOlderLoading(syncing);
-          setHasOlder(more);
-          setItems((current) => {
-            const ids = new Set(current.map((email) => email.id));
-            return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
-          });
-        });
-        setAliasRules(rules);
-        setItems(emails);
-        const unresolved = emails.map((email) => email.to).filter((address) => !rules.some((rule) => testRuleMatch(address, rule)));
-        await saveUnresolvedAddresses(unresolved);
-      } catch (e: any) {
-        setError(String(e?.message || e));
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  const groups = useMemo(() => groupByToAddress(items, aliasRules), [items, aliasRules]);
-  const addresses = useMemo(() => Object.keys(groups).sort(), [groups]);
-  const navItems = useMemo(() => {
-    const assigned = new Set(folders.flatMap((folder) => folder.inboxes.map((name) => name.toLowerCase())));
-    const items: Array<{ type: "folder"; folder: InboxFolder } | { type: "inbox"; address: string; folderId?: string }> = [];
-    for (const folder of folders) {
-      items.push({ type: "folder", folder });
-      if (!collapsedFolders.includes(folder.id)) {
-        for (const address of addresses.filter((item) => folder.inboxes.some((name) => name.toLowerCase() === item.toLowerCase()))) items.push({ type: "inbox", address, folderId: folder.id });
-      }
-    }
-    for (const address of addresses) if (!assigned.has(address.toLowerCase())) items.push({ type: "inbox", address });
-    return items;
-  }, [addresses, folders, collapsedFolders]);
-
+  const [layout, setLayout] = useState<InboxLayout>(DEFAULT_INBOX_LAYOUT);
+  const [inboxSearch, setInboxSearch] = useState("");
+  const [inboxSort, setInboxSort] = useState<InboxSort>("name");
+  const [inboxSortDesc, setInboxSortDesc] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [messageSearch, setMessageSearch] = useState("");
   const [messageSort, setMessageSort] = useState<"newest" | "oldest" | "sender" | "subject">("newest");
 
-  useEffect(() => {
-    if (!selectedAddress || !addresses.includes(selectedAddress)) {
-      setSelectedAddress(addresses[0] ?? null);
-    }
-  }, [addresses, selectedAddress]);
-
-  useEffect(() => {
-    if (selectedAddress) {
-      const firstId = groups[selectedAddress]?.slice().sort((a, b) => b.date.localeCompare(a.date))[0]?.id ?? null;
-      setSelectedMessageId(firstId);
-    } else {
-      setSelectedMessageId(null);
-    }
-  }, [selectedAddress, groups]);
-
   const { width } = useWindowDimensions();
   const isNarrow = width < 900;
 
+  const accountSignature = useRef<string | null>(null);
+
+  const reloadSettings = useCallback(async () => {
+    const [accs, rules, savedFolders] = await Promise.all([getAccounts(), loadAliasRules(), loadInboxFolders()]);
+    setAccounts(accs);
+    setAliasRules(rules);
+    setFolders(savedFolders);
+    setCollapsedFolders(savedFolders.filter((folder) => folder.collapsed).map((folder) => folder.id));
+    const signature = accs.map((account) => account.id).sort().join(",");
+    if (accountSignature.current !== null && signature !== accountSignature.current) {
+      // An account was added or removed while we were on another screen.
+      void fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
+        setOlderLoading(syncing);
+        setHasOlder(more);
+        setItems((current) => {
+          const ids = new Set(current.map((email) => email.id));
+          return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+        });
+      }).then((emails) => setItems(emails)).catch((e: any) => setError(String(e?.message || e)));
+    }
+    accountSignature.current = signature;
+  }, []);
+
+  const loadEmails = useCallback(async (accs: MailAccount[]) => {
+    try {
+      setLoading(true);
+      const emails = await fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
+        setOlderLoading(syncing);
+        setHasOlder(more);
+        setItems((current) => {
+          const ids = new Set(current.map((email) => email.id));
+          return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+        });
+      });
+      setItems(emails);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadInboxLayout().then(setLayout); }, []);
+
+  // Stack screens are kept mounted, so reload on every focus and whenever a
+  // settings persister (node editor / accounts screen) signals a change.
+  useFocusEffect(useCallback(() => { void reloadSettings(); }, [reloadSettings]));
+  useEffect(() => subscribeToSettings(() => { void reloadSettings(); }), [reloadSettings]);
+
+  useEffect(() => {
+    (async () => {
+      const accs = await getAccounts();
+      accountSignature.current = accs.map((account) => account.id).sort().join(",");
+      await Promise.all([reloadSettings(), loadEmails(accs)]);
+    })();
+  }, [loadEmails, reloadSettings]);
+
+  // Keep resolver suggestions in sync with every page loaded, including older mail.
+  useEffect(() => {
+    if (loading) return;
+    const timer = setTimeout(() => void saveUnresolvedAddresses(unresolvedAddressesFromEmails(items, aliasRules)), 500);
+    return () => clearTimeout(timer);
+  }, [items, aliasRules, loading]);
+
+  const groups = useMemo(() => groupByToAddress(items, aliasRules), [items, aliasRules]);
+
+  const folderMap = useMemo(() => {
+    const map = new Map<string, { folder: InboxFolder; inboxes: string[]; messages: Email[] }>();
+    for (const folder of folders) {
+      const inboxes = folderInboxNames(folder, groups, aliasRules);
+      map.set(folder.id, { folder, inboxes, messages: folderMessages(folder, groups, aliasRules) });
+    }
+    return map;
+  }, [folders, groups, aliasRules]);
+
+  const addresses = useMemo(() => {
+    const latest = (name: string) => groups[name]?.reduce((max, email) => Math.max(max, new Date(email.date).getTime()), 0) ?? 0;
+    return Object.keys(groups).sort((a, b) => {
+      const comparison = inboxSort === "count"
+        ? groups[b].length - groups[a].length || a.localeCompare(b)
+        : inboxSort === "newest"
+          ? latest(b) - latest(a) || a.localeCompare(b)
+          : a.localeCompare(b);
+      return inboxSortDesc ? -comparison : comparison;
+    });
+  }, [groups, inboxSort, inboxSortDesc]);
+
+  const navItems = useMemo<NavItem[]>(() => {
+    const term = inboxSearch.trim().toLowerCase();
+    const matches = (name: string) => !term || name.toLowerCase().includes(term);
+    const pinnedIndex = new Map(layout.pinnedItems.map((key, index) => [key, index]));
+    const folderRows: NavItem[] = [];
+    const inboxRows: NavItem[] = [];
+    const pinnedRows: NavItem[] = [];
+    const assigned = new Set<string>();
+
+    for (const { folder, inboxes, messages } of folderMap.values()) {
+      inboxes.forEach((name) => assigned.add(name.toLowerCase()));
+      const key = folderPinKey(folder.id);
+      const pinned = pinnedIndex.has(key);
+      const children = addresses.filter((address) => inboxes.some((name) => name.toLowerCase() === address.toLowerCase()) && matches(address));
+      if (!matches(folder.name) && children.length === 0 && !pinned) continue;
+      const row: NavItem = { type: "folder", id: folder.id, name: folder.name, inboxes, count: messages.length, pinned, key };
+      if (pinned) pinnedRows.push(row); else folderRows.push(row);
+      if (!collapsedFolders.includes(folder.id)) {
+        for (const address of children) {
+          const inboxKey = inboxPinKey(address);
+          if (pinnedIndex.has(inboxKey)) continue; // shown once, in the pinned section
+          inboxRows.push({ type: "inbox", address, folderId: folder.id, pinned: false, key: inboxKey });
+        }
+      }
+    }
+    for (const address of addresses) {
+      const key = inboxPinKey(address);
+      const pinned = pinnedIndex.has(key);
+      if (!pinned && (assigned.has(address.toLowerCase()) || !matches(address))) continue;
+      const row: NavItem = { type: "inbox", address, pinned, key };
+      if (pinned) pinnedRows.push(row); else inboxRows.push(row);
+    }
+    pinnedRows.sort((a, b) => (pinnedIndex.get(a.key) ?? 0) - (pinnedIndex.get(b.key) ?? 0));
+    const unpinned = layout.folderPlacement === "top" ? [...folderRows, ...inboxRows] : [...inboxRows, ...folderRows];
+    return [...pinnedRows, ...unpinned];
+  }, [folderMap, addresses, collapsedFolders, inboxSearch, layout.pinnedItems, layout.folderPlacement]);
+
+  useEffect(() => {
+    if (selectedFolderId) return;
+    if (!selectedAddress || !addresses.includes(selectedAddress)) setSelectedAddress(addresses[0] ?? null);
+  }, [addresses, selectedAddress, selectedFolderId]);
+
+  const selectedFolder = selectedFolderId ? folderMap.get(selectedFolderId) : undefined;
   const messages = useMemo(() => {
-    if (!selectedAddress) return [];
+    const source = selectedFolder ? selectedFolder.messages : selectedAddress ? groups[selectedAddress] || [] : [];
     const term = messageSearch.trim().toLowerCase();
-    const filtered = groups[selectedAddress].filter((email) => !term || [email.subject, email.from, email.to, email.snippet].some((part) => part.toLowerCase().includes(term)));
-    return filtered.sort((a, b) => messageSort === "oldest" ? a.date.localeCompare(b.date) : messageSort === "sender" ? a.from.localeCompare(b.from) : messageSort === "subject" ? a.subject.localeCompare(b.subject) : b.date.localeCompare(a.date));
-  }, [groups, selectedAddress, messageSearch, messageSort]);
+    const filtered = source.filter((email) => !term || [email.subject, email.from, email.to, email.snippet].some((part) => part.toLowerCase().includes(term)));
+    return [...filtered].sort((a, b) => messageSort === "oldest" ? a.date.localeCompare(b.date) : messageSort === "sender" ? a.from.localeCompare(b.from) : messageSort === "subject" ? a.subject.localeCompare(b.subject) : b.date.localeCompare(a.date));
+  }, [selectedFolder, selectedAddress, groups, messageSearch, messageSort]);
   const selectedMessage = useMemo(() => messages.find((m) => m.id === selectedMessageId) ?? null, [messages, selectedMessageId]);
 
+  useEffect(() => {
+    if (!messages.some((message) => message.id === selectedMessageId)) {
+      setSelectedMessageId(messages[0]?.id ?? null);
+    }
+  }, [messages, selectedMessageId]);
+
   const hasOnlyManualAccounts = accounts.length > 0 && accounts.every((a) => a.type === "manual");
+
+  const updateLayout = (patch: Partial<InboxLayout> | ((current: InboxLayout) => InboxLayout)) => {
+    setLayout((current) => {
+      const next = typeof patch === "function" ? patch(current) : { ...current, ...patch };
+      void saveInboxLayout(next);
+      return next;
+    });
+  };
+
+  const togglePin = (key: string) => updateLayout((current) => ({
+    ...current,
+    pinnedItems: current.pinnedItems.includes(key)
+      ? current.pinnedItems.filter((item) => item !== key)
+      : [...current.pinnedItems, key],
+  }));
+
+  const movePinned = (key: string, direction: -1 | 1) => updateLayout((current) => {
+    const index = current.pinnedItems.indexOf(key);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= current.pinnedItems.length) return current;
+    const pinnedItems = [...current.pinnedItems];
+    [pinnedItems[index], pinnedItems[target]] = [pinnedItems[target], pinnedItems[index]];
+    return { ...current, pinnedItems };
+  });
+
+  const pinControls = (item: NavItem) => (
+    <View style={{ flexDirection: "row", alignItems: "center" }}>
+      <Pressable onPress={() => togglePin(item.key)} accessibilityLabel={item.pinned ? "Unpin" : "Pin"} style={{ paddingHorizontal: 5, paddingVertical: 6, justifyContent: "center" }}>
+        <T style={{ color: item.pinned ? "#fbbf24" : "#666", fontSize: 14 }}>{item.pinned ? "★" : "☆"}</T>
+      </Pressable>
+      {item.pinned && (
+        <>
+          <Pressable onPress={() => movePinned(item.key, -1)} accessibilityLabel="Move pin up" style={{ paddingHorizontal: 3, justifyContent: "center" }}><T style={{ color: "#aaa", fontSize: 12 }}>↑</T></Pressable>
+          <Pressable onPress={() => movePinned(item.key, 1)} accessibilityLabel="Move pin down" style={{ paddingHorizontal: 3, justifyContent: "center" }}><T style={{ color: "#aaa", fontSize: 12 }}>↓</T></Pressable>
+        </>
+      )}
+    </View>
+  );
+
   const toggleInboxFolder = (folderId: string) => {
     const collapse = !collapsedFolders.includes(folderId);
     const next = folders.map((folder) => folder.id === folderId ? { ...folder, collapsed: collapse } : folder);
     setCollapsedFolders((current) => collapse ? [...current, folderId] : current.filter((id) => id !== folderId));
     setFolders(next);
     void saveInboxFolders(next);
+  };
+
+  const startResize = (column: "inboxesWidth" | "messagesWidth") => (event: any) => {
+    if (Platform.OS !== "web" || isNarrow) return;
+    event?.preventDefault?.();
+    const startX = event?.clientX ?? event?.nativeEvent?.clientX ?? 0;
+    const initial = layout[column];
+    const onMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.max(180, Math.min(720, initial + moveEvent.clientX - startX));
+      setLayout((current) => ({ ...current, [column]: nextWidth }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setLayout((current) => { void saveInboxLayout(current); return current; });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   const loadOlderManually = async () => {
@@ -160,6 +319,15 @@ export default function Index() {
       setOlderLoading(false);
     }
   };
+
+  const columnStyle = (key: "inboxesWidth" | "messagesWidth") =>
+    isNarrow ? { width: "100%" as const } : { width: layout[key] };
+
+  const collapsedRail = (label: string, onExpand: () => void) => (
+    <View style={{ width: isNarrow ? "100%" : 36, alignItems: "center", paddingVertical: 10, borderRightWidth: isNarrow ? 0 : 1, borderRightColor: "#111" }}>
+      <Pressable onPress={onExpand} style={{ padding: 8, borderWidth: 1, borderColor: "#333", borderRadius: 8 }}><T>{label}</T></Pressable>
+    </View>
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: "#000", margin: 10 }}>
@@ -199,111 +367,173 @@ export default function Index() {
       )}
       {!loading && (
         <View style={{ flex: 1, flexDirection: isNarrow ? "column" : "row" }}>
-          <FadeSlideIn delay={80} style={{ width: isNarrow ? "100%" : "22%", borderRightWidth: isNarrow ? 0 : 1, borderRightColor: "#111", padding: 8 }}>
-            <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
-              <TypewriterText text="Virtual Inboxes" startDelayMs={200} pauseAtEndMs={0} />
-            </Heading>
-            {!!accounts.some((account) => account.type === "gmail") && <Pressable disabled={olderLoading || !hasOlder} onPress={loadOlderManually} style={{ padding: 9, borderWidth: 1, borderColor: "#333", borderRadius: 8, marginBottom: 8, backgroundColor: "#101010", opacity: olderLoading || !hasOlder ? 0.55 : 1 }}><T style={{ textAlign: "center", fontWeight: "600" }}>{olderLoading ? "Syncing older messages…" : hasOlder ? "Load older messages" : "All available messages loaded"}</T></Pressable>}
-            <FlatList
-              data={navItems}
-              keyExtractor={(item) => item.type === "folder" ? `folder:${item.folder.id}` : `inbox:${item.address}`}
-              ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-              renderItem={({ item: navItem }) => {
-                if (navItem.type === "folder") {
-                  const isCollapsed = collapsedFolders.includes(navItem.folder.id);
-                  return <Pressable onPress={() => toggleInboxFolder(navItem.folder.id)} style={{ padding: 9, backgroundColor: "#101010", borderRadius: 8, borderWidth: 1, borderColor: "#252525" }}><T style={{ fontWeight: "700" }}>{isCollapsed ? "+" : "−"} {navItem.folder.name} <T style={{ color: "#777", fontWeight: "400" }}>({navItem.folder.inboxes.length})</T></T></Pressable>;
-                }
-                const address = navItem.address;
-                const list = groups[address];
-                const latest = list.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-                const selected = address === selectedAddress;
-                return (
-                  <Pressable
-                    onPress={() => {
-                      setSelectedAddress(address);
-                      const firstId = list.slice().sort((a, b) => b.date.localeCompare(a.date))[0]?.id ?? null;
-                      setSelectedMessageId(firstId);
-                    }}
-                    style={({ pressed }) => ({
-                      padding: 10,
-                      paddingLeft: navItem.folderId ? 22 : 10,
-                      backgroundColor: selected ? "#0f0f0f" : pressed ? "#0a0a0a" : "#050505",
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor: selected ? "#2a2a2a" : "#1a1a1a",
-                    })}
-                  >
-                    <T style={{ fontSize: 15, fontWeight: "600", marginBottom: 2 }}>{address}</T>
-                    <T style={{ color: "#bbb" }} numberOfLines={1}>
-                      {latest.subject} — {latest.snippet}
-                    </T>
-                    <T style={{ color: "#666", marginTop: 4 }}>{list.length} message(s)</T>
-                  </Pressable>
-                );
-              }}
-            />
-          </FadeSlideIn>
-
-          <FadeSlideIn delay={180} style={{ width: isNarrow ? "100%" : "28%", borderRightWidth: isNarrow ? 0 : 1, borderRightColor: "#111", padding: 8 }}>
-            <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
-              <TypewriterText text="Messages" startDelayMs={600} pauseAtEndMs={0} />
-            </Heading>
-            <View style={{ flexDirection: isNarrow ? "column" : "row", gap: 6, marginBottom: 8 }}>
-              <TextInput value={messageSearch} onChangeText={setMessageSearch} placeholder="Filter by sender, subject, or text" placeholderTextColor="#666" style={{ flex: 1, minWidth: 0, backgroundColor: "#0a0a0a", borderColor: "#252525", borderWidth: 1, borderRadius: 7, padding: 8, color: "#fff" }} />
-              <Pressable onPress={() => setMessageSort((sort) => sort === "newest" ? "oldest" : sort === "oldest" ? "sender" : sort === "sender" ? "subject" : "newest")} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, justifyContent: "center", minHeight: 38 }}><T>Sort: {messageSort === "newest" ? "Newest" : messageSort === "oldest" ? "Oldest" : messageSort === "sender" ? "Sender" : "Subject"}</T></Pressable>
-            </View>
-            {selectedAddress ? (
-              <FlatList
-                data={messages}
-                keyExtractor={(m) => m.id}
-                ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-                renderItem={({ item }) => {
-                  const selected = item.id === selectedMessageId;
-                  return (
-                    <Pressable
-                      onPress={() => setSelectedMessageId(item.id)}
-                      style={({ pressed }) => ({
-                        padding: 10,
-                        backgroundColor: selected ? "#101010" : pressed ? "#0a0a0a" : "#050505",
-                        borderRadius: 10,
-                        borderWidth: 1,
-                        borderColor: selected ? "#2a2a2a" : "#1a1a1a",
-                      })}
-                    >
-                      <T style={{ fontSize: 15, fontWeight: "600" }}>{item.subject}</T>
-                      <T style={{ color: "#bbb" }} numberOfLines={1}>{item.snippet}</T>
-                      <T style={{ color: "#666", marginTop: 4 }}>From: {item.from}</T>
-                    </Pressable>
-                  );
-                }}
-              />
-            ) : (
-              <T style={{ color: "#888" }}>Select a virtual inbox on the left.</T>
-            )}
-          </FadeSlideIn>
-
-          <FadeSlideIn delay={260} style={{ flex: 1, padding: 12, maxHeight: '100%', overflow: Platform.OS === 'web' ? 'scroll' : undefined }}>
-            <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
-              <TypewriterText text="Message" startDelayMs={1000} pauseAtEndMs={900} />
-            </Heading>
-            {selectedMessage ? (
-              <View style={{ flex: 1, maxHeight: "100%", overflow: Platform.OS === "web" ? "scroll" : undefined }}>
-                <Heading style={{ fontSize: 18, fontWeight: "700", marginBottom: 8 }}>{selectedMessage.subject}</Heading>
-                <T style={{ color: "#bbb" }}>From: {selectedMessage.from}</T>
-                <T style={{ color: "#bbb" }}>To: {selectedMessage.to}</T>
-                <T style={{ color: "#666", marginBottom: 12 }}>{new Date(selectedMessage.date).toLocaleString()}</T>
-                <View style={{ flex: 1, minHeight: 0 }}>
-                  {selectedMessage.bodyHtml ? (
-                    <HtmlViewer html={selectedMessage.bodyHtml} />
-                  ) : (
-                    <T style={{ lineHeight: 22 }}>{selectedMessage.bodyText || selectedMessage.body}</T>
-                  )}
+          {layout.collapsedInboxes
+            ? collapsedRail("▸", () => updateLayout({ collapsedInboxes: false }))
+            : (
+              <FadeSlideIn delay={80} style={[columnStyle("inboxesWidth"), { borderRightWidth: isNarrow ? 0 : 1, borderRightColor: "#111", padding: 8 }]}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
+                    <TypewriterText text="Virtual Inboxes" startDelayMs={200} pauseAtEndMs={0} />
+                  </Heading>
+                  <Pressable onPress={() => updateLayout({ collapsedInboxes: true })} accessibilityLabel="Collapse inboxes column"><T style={{ color: "#888", paddingHorizontal: 6 }}>‹</T></Pressable>
                 </View>
-              </View>
-            ) : (
-              <T style={{ color: "#888" }}>Select a message from the middle column.</T>
+
+                <View style={{ flexDirection: "row", gap: 6, marginBottom: 6 }}>
+                  <TextInput
+                    value={inboxSearch}
+                    onChangeText={setInboxSearch}
+                    placeholder="Filter inboxes and folders"
+                    placeholderTextColor="#666"
+                    style={{ flex: 1, minWidth: 0, backgroundColor: "#0a0a0a", borderColor: "#252525", borderWidth: 1, borderRadius: 7, padding: 8, color: "#fff" }}
+                  />
+                </View>
+                <View style={{ flexDirection: "row", gap: 6, marginBottom: 8 }}>
+                  <Pressable onPress={() => setInboxSort((sort) => sort === "name" ? "count" : sort === "count" ? "newest" : "name")} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, justifyContent: "center", minHeight: 32 }}>
+                    <T style={{ fontSize: 12 }}>Sort: {inboxSort === "name" ? "Name" : inboxSort === "count" ? "Messages" : "Newest"}</T>
+                  </Pressable>
+                  <Pressable onPress={() => setInboxSortDesc((desc) => !desc)} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, justifyContent: "center", minHeight: 32 }}>
+                    <T style={{ fontSize: 12 }}>{inboxSortDesc ? "↓ Desc" : "↑ Asc"}</T>
+                  </Pressable>
+                </View>
+                <Pressable onPress={() => updateLayout((current) => ({ ...current, folderPlacement: current.folderPlacement === "top" ? "bottom" : "top" }))} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 8, alignSelf: "flex-start" }}>
+                  <T style={{ fontSize: 12 }}>Folders: {layout.folderPlacement === "top" ? "above" : "below"} inboxes</T>
+                </Pressable>
+
+                {!!accounts.some((account) => account.type === "gmail") && <Pressable disabled={olderLoading || !hasOlder} onPress={loadOlderManually} style={{ padding: 9, borderWidth: 1, borderColor: "#333", borderRadius: 8, marginBottom: 8, backgroundColor: "#101010", opacity: olderLoading || !hasOlder ? 0.55 : 1 }}><T style={{ textAlign: "center", fontWeight: "600" }}>{olderLoading ? "Syncing older messages…" : hasOlder ? "Load older messages" : "All available messages loaded"}</T></Pressable>}
+                <FlatList
+                  data={navItems}
+                  keyExtractor={(item) => item.key}
+                  ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+                  renderItem={({ item: navItem }) => {
+                    if (navItem.type === "folder") {
+                      const isCollapsed = collapsedFolders.includes(navItem.id);
+                      const selected = selectedFolderId === navItem.id;
+                      return (
+                        <View style={{ flexDirection: "row", gap: 4, alignItems: "stretch" }}>
+                          <Pressable
+                            onPress={() => { setSelectedFolderId(navItem.id); setSelectedAddress(null); }}
+                            style={{ flex: 1, padding: 9, backgroundColor: selected ? "#152032" : "#101010", borderRadius: 8, borderWidth: 1, borderColor: selected ? "#3b82f6" : "#252525" }}
+                          >
+                            <T style={{ fontWeight: "700" }}>{navItem.pinned ? "★ " : ""}{navItem.name}</T>
+                            <T style={{ color: "#777", fontSize: 12 }}>{navItem.inboxes.length} inbox(es) · {navItem.count} message(s)</T>
+                          </Pressable>
+                          {pinControls(navItem)}
+                          <Pressable onPress={() => toggleInboxFolder(navItem.id)} accessibilityLabel={`Toggle ${navItem.name}`} style={{ padding: 9, backgroundColor: "#101010", borderRadius: 8, borderWidth: 1, borderColor: "#252525", justifyContent: "center" }}>
+                            <T>{isCollapsed ? "+" : "−"}</T>
+                          </Pressable>
+                        </View>
+                      );
+                    }
+                    const address = navItem.address;
+                    const list = groups[address] || [];
+                    const selected = !selectedFolderId && address === selectedAddress;
+                    return (
+                      <View style={{ flexDirection: "row", alignItems: "stretch", gap: 2 }}>
+                        <Pressable
+                          onPress={() => { setSelectedFolderId(null); setSelectedAddress(address); }}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            padding: 10,
+                            paddingLeft: navItem.folderId ? 22 : 10,
+                            backgroundColor: selected ? "#0f0f0f" : pressed ? "#0a0a0a" : "#050505",
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: selected ? "#2a2a2a" : "#1a1a1a",
+                          })}
+                        >
+                          <T style={{ fontSize: 15, fontWeight: "600", marginBottom: 2 }}>{navItem.pinned ? "★ " : ""}{address}</T>
+                          <T style={{ color: "#bbb" }} numberOfLines={1}>{list[0]?.subject ?? ""}</T>
+                          <T style={{ color: "#666", marginTop: 4 }}>{list.length} message(s)</T>
+                        </Pressable>
+                        {pinControls(navItem)}
+                      </View>
+                    );
+                  }}
+                />
+              </FadeSlideIn>
             )}
-          </FadeSlideIn>
+
+          {!isNarrow && !layout.collapsedInboxes && <ColumnResizer onResize={startResize("inboxesWidth")} />}
+
+          {layout.collapsedMessages
+            ? collapsedRail("▸", () => updateLayout({ collapsedMessages: false }))
+            : (
+              <FadeSlideIn delay={180} style={[columnStyle("messagesWidth"), { borderRightWidth: isNarrow ? 0 : 1, borderRightColor: "#111", padding: 8 }]}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
+                    <TypewriterText text="Messages" startDelayMs={600} pauseAtEndMs={0} />
+                  </Heading>
+                  <Pressable onPress={() => updateLayout({ collapsedMessages: true })} accessibilityLabel="Collapse messages column"><T style={{ color: "#888", paddingHorizontal: 6 }}>‹</T></Pressable>
+                </View>
+                {selectedFolder && <T style={{ color: "#8ab4f8", marginBottom: 6 }} numberOfLines={1}>Folder: {selectedFolder.folder.name}</T>}
+                {selectedAddress && !selectedFolder && <T style={{ color: "#8ab4f8", marginBottom: 6 }} numberOfLines={1}>Inbox: {selectedAddress}</T>}
+                <View style={{ flexDirection: isNarrow ? "column" : "row", gap: 6, marginBottom: 8 }}>
+                  <TextInput value={messageSearch} onChangeText={setMessageSearch} placeholder="Filter by sender, subject, or text" placeholderTextColor="#666" style={{ flex: 1, minWidth: 0, backgroundColor: "#0a0a0a", borderColor: "#252525", borderWidth: 1, borderRadius: 7, padding: 8, color: "#fff" }} />
+                  <Pressable onPress={() => setMessageSort((sort) => sort === "newest" ? "oldest" : sort === "oldest" ? "sender" : sort === "sender" ? "subject" : "newest")} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, justifyContent: "center", minHeight: 38 }}><T>Sort: {messageSort === "newest" ? "Newest" : messageSort === "oldest" ? "Oldest" : messageSort === "sender" ? "Sender" : "Subject"}</T></Pressable>
+                </View>
+                {messages.length ? (
+                  <FlatList
+                    data={messages}
+                    keyExtractor={(m) => m.id}
+                    ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+                    renderItem={({ item }) => {
+                      const selected = item.id === selectedMessageId;
+                      return (
+                        <Pressable
+                          onPress={() => setSelectedMessageId(item.id)}
+                          style={({ pressed }) => ({
+                            padding: 10,
+                            backgroundColor: selected ? "#101010" : pressed ? "#0a0a0a" : "#050505",
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: selected ? "#2a2a2a" : "#1a1a1a",
+                          })}
+                        >
+                          <T style={{ fontSize: 15, fontWeight: "600" }}>{item.subject}</T>
+                          <T style={{ color: "#bbb" }} numberOfLines={1}>{item.snippet}</T>
+                          <T style={{ color: "#666", marginTop: 4 }}>From: {item.from}</T>
+                          {!!selectedFolder && <T style={{ color: "#666", marginTop: 2 }}>Inbox: {item.to}</T>}
+                        </Pressable>
+                      );
+                    }}
+                  />
+                ) : (
+                  <T style={{ color: "#888" }}>{selectedFolder || selectedAddress ? "No messages match this filter." : "Select a virtual inbox or folder on the left."}</T>
+                )}
+              </FadeSlideIn>
+            )}
+
+          {!isNarrow && !layout.collapsedMessages && !layout.collapsedMessage && <ColumnResizer onResize={startResize("messagesWidth")} />}
+
+          {layout.collapsedMessage
+            ? collapsedRail("▸", () => updateLayout({ collapsedMessage: false }))
+            : (
+              <FadeSlideIn delay={260} style={{ flex: 1, padding: 12, maxHeight: "100%", overflow: Platform.OS === "web" ? "scroll" : undefined }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
+                    <TypewriterText text="Message" startDelayMs={1000} pauseAtEndMs={900} />
+                  </Heading>
+                  <Pressable onPress={() => updateLayout({ collapsedMessage: true })} accessibilityLabel="Collapse message column"><T style={{ color: "#888", paddingHorizontal: 6 }}>›</T></Pressable>
+                </View>
+                {selectedMessage ? (
+                  <View style={{ flex: 1, maxHeight: "100%", overflow: Platform.OS === "web" ? "scroll" : undefined }}>
+                    <Heading style={{ fontSize: 18, fontWeight: "700", marginBottom: 8 }}>{selectedMessage.subject}</Heading>
+                    <T style={{ color: "#bbb" }}>From: {selectedMessage.from}</T>
+                    <T style={{ color: "#bbb" }}>To: {selectedMessage.to}</T>
+                    <T style={{ color: "#666", marginBottom: 12 }}>{new Date(selectedMessage.date).toLocaleString()}</T>
+                    <View style={{ flex: 1, minHeight: 300 }}>
+                      {selectedMessage.bodyHtml ? (
+                        <HtmlViewer html={selectedMessage.bodyHtml} />
+                      ) : (
+                        <T style={{ lineHeight: 22 }}>{selectedMessage.bodyText || selectedMessage.body}</T>
+                      )}
+                    </View>
+                  </View>
+                ) : (
+                  <T style={{ color: "#888" }}>Select a message from the middle column.</T>
+                )}
+              </FadeSlideIn>
+            )}
         </View>
       )}
     </View>

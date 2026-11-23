@@ -1,7 +1,6 @@
 import {Email} from "./email_utils";
 import {GmailAccount, MailAccount, getValidGmailAccount} from "./accounts";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import {Platform} from "react-native";
+import { getAllKeys, getItem, onStorageQuotaExceeded, removeItem, setItem } from "./storage";
 
 function getHeader(headers: { name: string; value: string }[], key: string): string | undefined {
   const h = headers.find((x) => x.name.toLowerCase() === key.toLowerCase());
@@ -50,43 +49,55 @@ function extractHtmlFromPayload(payload: any): string | undefined {
 }
 
 const gmailEmailCache: Record<string, Email> = {};
-let gmailPageTokenCache: Record<string, string | undefined> = {};
+const EMAIL_CACHE_PREFIX = "uec.email.";
+const MAX_CACHED_EMAILS = 180;
+
+/** Drop the oldest cached messages to keep browser storage well under quota. */
+export async function pruneEmailCache(keep = 120): Promise<void> {
+  const keys = (await getAllKeys()).filter((key) => key.startsWith(EMAIL_CACHE_PREFIX));
+  if (keys.length <= keep) return;
+  const entries = await Promise.all(keys.map(async (key) => {
+    try {
+      const raw = await getItem(key, false);
+      const date = raw ? (JSON.parse(raw) as Email)?.date : undefined;
+      return { key, date: typeof date === "string" ? date : "" };
+    } catch {
+      return { key, date: "" };
+    }
+  }));
+  entries.sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
+  for (const entry of entries.slice(0, entries.length - keep)) await removeItem(entry.key, false);
+}
+
+// If a write still hits the browser quota, free cached mail and let the facade retry.
+onStorageQuotaExceeded(() => pruneEmailCache(40));
 
 async function getCachedEmail(id: string): Promise<Email | undefined> {
   if (gmailEmailCache[id]) return gmailEmailCache[id];
   try {
-    if (Platform.OS === "web") {
-      const raw = localStorage.getItem(`uec.email.${id}`);
-      if (raw) return JSON.parse(raw) as Email;
-    } else {
-      const raw = await AsyncStorage.getItem(`uec.email.${id}`);
-      if (raw) return JSON.parse(raw) as Email;
-    }
+    const raw = await getItem(`${EMAIL_CACHE_PREFIX}${id}`, false);
+    if (raw) return JSON.parse(raw) as Email;
   } catch {}
   return undefined;
 }
 
 async function setCachedEmail(id: string, email: Email): Promise<void> {
+  // Keep the full message in memory for this session; cap the persisted copy so
+  // a single large HTML newsletter cannot exhaust localStorage on its own.
   gmailEmailCache[id] = email;
-  try {
-    const data = JSON.stringify(email);
-    if (Platform.OS === "web") {
-      localStorage.setItem(`uec.email.${id}` , data);
-    } else {
-      await AsyncStorage.setItem(`uec.email.${id}`, data);
-    }
-  } catch {}
+  const persisted: Email = {
+    ...email,
+    bodyText: email.bodyText?.slice(0, 60_000),
+    bodyHtml: email.bodyHtml?.slice(0, 200_000),
+  };
+  await setItem(`${EMAIL_CACHE_PREFIX}${id}`, JSON.stringify(persisted), false);
+  if (Object.keys(gmailEmailCache).length > MAX_CACHED_EMAILS) void pruneEmailCache(MAX_CACHED_EMAILS - 60);
 }
 
 async function getCachedEmailList(accountEmail: string): Promise<{ ids: string[]; nextPageToken?: string } | undefined> {
   try {
-    if (Platform.OS === "web") {
-      const raw = localStorage.getItem(`uec.emailList.v2.${accountEmail}`);
-      if (raw) return JSON.parse(raw);
-    } else {
-      const raw = await AsyncStorage.getItem(`uec.emailList.v2.${accountEmail}`);
-      if (raw) return JSON.parse(raw);
-    }
+    const raw = await getItem(`uec.emailList.v2.${accountEmail}`, false);
+    if (raw) return JSON.parse(raw);
   } catch {}
   return undefined;
 }
@@ -95,12 +106,7 @@ async function setCachedEmailList(accountEmail: string, ids: string[], nextPageT
   try {
     const previous = await getCachedEmailList(accountEmail);
     const mergedIds = [...new Set([...(previous?.ids || []), ...ids])];
-    const data = JSON.stringify({ ids: mergedIds, nextPageToken });
-    if (Platform.OS === "web") {
-      localStorage.setItem(`uec.emailList.v2.${accountEmail}`, data);
-    } else {
-      await AsyncStorage.setItem(`uec.emailList.v2.${accountEmail}`, data);
-    }
+    await setItem(`uec.emailList.v2.${accountEmail}`, JSON.stringify({ ids: mergedIds, nextPageToken }), false);
   } catch {}
 }
 
@@ -202,9 +208,6 @@ export async function fetchGmailEmailsOneMonth(account: GmailAccount, maxResults
     pageToken = nextPageToken;
     reachedOneMonthAgo = reached || !nextPageToken;
   } while (!reachedOneMonthAgo && pageToken);
-  if (account.email) {
-    gmailPageTokenCache[account.email] = pageToken;
-  }
   return allEmails;
 }
 

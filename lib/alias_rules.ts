@@ -1,6 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SecureStore from "expo-secure-store";
-import { Platform } from "react-native";
+import { getItem, setItem, type SaveResult } from "./storage";
 
 export type MatchType = "exact" | "contains" | "domain" | "prefix" | "regex" | "all";
 
@@ -118,18 +116,9 @@ function normalizeRules(value: unknown): AliasRule[] {
   });
 }
 
-async function read(): Promise<string | null> {
-  return Platform.OS === "web" ? AsyncStorage.getItem(KEY) : SecureStore.getItemAsync(KEY);
-}
-
-async function write(value: string): Promise<void> {
-  if (Platform.OS === "web") await AsyncStorage.setItem(KEY, value);
-  else await SecureStore.setItemAsync(KEY, value);
-}
-
 export async function loadAliasRules(): Promise<AliasRule[]> {
   try {
-    const raw = await read();
+    const raw = await getItem(KEY);
     if (!raw) return [];
     return normalizeRules(JSON.parse(raw));
   } catch {
@@ -137,8 +126,13 @@ export async function loadAliasRules(): Promise<AliasRule[]> {
   }
 }
 
-export async function saveAliasRules(rules: AliasRule[]): Promise<void> {
-  await write(JSON.stringify(normalizeRules(rules)));
+export async function saveAliasRules(rules: AliasRule[]): Promise<SaveResult> {
+  return setItem(KEY, JSON.stringify(normalizeRules(rules)));
+}
+
+/** Rules that can sort a message to a specific inbox (catch-all never counts). */
+export function isSpecificRule(rule: AliasRule): boolean {
+  return rule.enabled !== false && (rule.matchType || "exact") !== "all";
 }
 
 export function resolveInbox(address: string, rules: AliasRule[], email?: { from?: string; subject?: string; body?: string; to?: string }): string {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { AliasRule, MatchType, loadAliasRules, saveAliasRules, validateRule, resolveInbox } from "@/lib/alias_rules";
+import { notifySettingsChanged } from "@/lib/settings_events";
 
 const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "exact", label: "Exact" },
@@ -8,6 +9,7 @@ const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "prefix", label: "Prefix" },
   { type: "contains", label: "Contains" },
   { type: "regex", label: "Regex" },
+  { type: "all", label: "Catch all" },
 ];
 
 export function NodeEditor() {
@@ -26,7 +28,7 @@ export function NodeEditor() {
   const add = async () => {
     const nextRule: AliasRule = {
       id: `rule_${Date.now()}`,
-      alias: alias.trim(),
+      alias: matchType === "all" ? "" : alias.trim(),
       matchType,
       inbox: inbox.trim(),
       enabled: true,
@@ -37,22 +39,26 @@ export function NodeEditor() {
       return setStatus("That pattern already has a rule.");
     }
     const next = [...rules, nextRule];
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (!saved.ok) return setStatus("Storage is full — route kept for this session only.");
     setRules(next);
     setAlias("");
     setInbox("");
+    notifySettingsChanged();
     setStatus("Route saved.");
   };
 
   const remove = async (id: string) => {
     const next = rules.filter((rule) => rule.id !== id);
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (saved.ok) notifySettingsChanged();
     setRules(next);
   };
 
   const toggle = async (id: string) => {
     const next = rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (saved.ok) notifySettingsChanged();
     setRules(next);
   };
 
@@ -89,7 +95,7 @@ export function NodeEditor() {
         ))}
       </View>
 
-      <TextInput
+      {matchType !== "all" && <TextInput
         accessibilityLabel="Alias pattern"
         placeholder={
           matchType === "domain"
@@ -106,7 +112,7 @@ export function NodeEditor() {
         value={alias}
         onChangeText={setAlias}
         style={{ color: "#fff", backgroundColor: "#111a28", borderColor: "#34445b", borderWidth: 1, borderRadius: 6, padding: 10, marginBottom: 10 }}
-      />
+      />}
       <TextInput
         accessibilityLabel="Virtual inbox"
         placeholder="Destination Virtual Inbox (e.g. Work, Newsletters, Finance)"
