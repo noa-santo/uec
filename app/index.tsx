@@ -1,9 +1,10 @@
-import { FlatList, Pressable, Text, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
+import { FlatList, Pressable, Text, TextInput, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Email, groupByToAddress, saveUnresolvedAddresses } from "@/lib/email_utils";
 import { getAccounts, GmailAccount, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts, fetchOlderGmailEmails } from "@/lib/gmail";
 import { loadAliasRules, testRuleMatch } from "@/lib/alias_rules";
+import { InboxFolder, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
@@ -52,8 +53,12 @@ export default function Index() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [aliasRules, setAliasRules] = useState<Awaited<ReturnType<typeof loadAliasRules>>>([]);
+  const [folders, setFolders] = useState<InboxFolder[]>([]);
+  const [collapsedFolders, setCollapsedFolders] = useState<string[]>([]);
   const [olderLoading, setOlderLoading] = useState(false);
   const [hasOlder, setHasOlder] = useState(true);
+
+  useEffect(() => { loadInboxFolders().then((saved) => { setFolders(saved); setCollapsedFolders(saved.filter((folder) => folder.collapsed).map((folder) => folder.id)); }); }, []);
 
   useEffect(() => {
     (async () => {
@@ -83,9 +88,23 @@ export default function Index() {
 
   const groups = useMemo(() => groupByToAddress(items, aliasRules), [items, aliasRules]);
   const addresses = useMemo(() => Object.keys(groups).sort(), [groups]);
+  const navItems = useMemo(() => {
+    const assigned = new Set(folders.flatMap((folder) => folder.inboxes.map((name) => name.toLowerCase())));
+    const items: Array<{ type: "folder"; folder: InboxFolder } | { type: "inbox"; address: string; folderId?: string }> = [];
+    for (const folder of folders) {
+      items.push({ type: "folder", folder });
+      if (!collapsedFolders.includes(folder.id)) {
+        for (const address of addresses.filter((item) => folder.inboxes.some((name) => name.toLowerCase() === item.toLowerCase()))) items.push({ type: "inbox", address, folderId: folder.id });
+      }
+    }
+    for (const address of addresses) if (!assigned.has(address.toLowerCase())) items.push({ type: "inbox", address });
+    return items;
+  }, [addresses, folders, collapsedFolders]);
 
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [messageSearch, setMessageSearch] = useState("");
+  const [messageSort, setMessageSort] = useState<"newest" | "oldest" | "sender" | "subject">("newest");
 
   useEffect(() => {
     if (!selectedAddress || !addresses.includes(selectedAddress)) {
@@ -105,10 +124,23 @@ export default function Index() {
   const { width } = useWindowDimensions();
   const isNarrow = width < 900;
 
-  const messages = useMemo(() => (selectedAddress ? groups[selectedAddress].slice().sort((a, b) => b.date.localeCompare(a.date)) : []), [groups, selectedAddress]);
+  const messages = useMemo(() => {
+    if (!selectedAddress) return [];
+    const term = messageSearch.trim().toLowerCase();
+    const filtered = groups[selectedAddress].filter((email) => !term || [email.subject, email.from, email.to, email.snippet].some((part) => part.toLowerCase().includes(term)));
+    return filtered.sort((a, b) => messageSort === "oldest" ? a.date.localeCompare(b.date) : messageSort === "sender" ? a.from.localeCompare(b.from) : messageSort === "subject" ? a.subject.localeCompare(b.subject) : b.date.localeCompare(a.date));
+  }, [groups, selectedAddress, messageSearch, messageSort]);
   const selectedMessage = useMemo(() => messages.find((m) => m.id === selectedMessageId) ?? null, [messages, selectedMessageId]);
 
   const hasOnlyManualAccounts = accounts.length > 0 && accounts.every((a) => a.type === "manual");
+  const toggleInboxFolder = (folderId: string) => {
+    const collapse = !collapsedFolders.includes(folderId);
+    const next = folders.map((folder) => folder.id === folderId ? { ...folder, collapsed: collapse } : folder);
+    setCollapsedFolders((current) => collapse ? [...current, folderId] : current.filter((id) => id !== folderId));
+    setFolders(next);
+    void saveInboxFolders(next);
+  };
+
   const loadOlderManually = async () => {
     const gmail = accounts.find((account): account is GmailAccount => account.type === "gmail");
     if (!gmail || olderLoading || !hasOlder) return;
@@ -173,10 +205,15 @@ export default function Index() {
             </Heading>
             {!!accounts.some((account) => account.type === "gmail") && <Pressable disabled={olderLoading || !hasOlder} onPress={loadOlderManually} style={{ padding: 9, borderWidth: 1, borderColor: "#333", borderRadius: 8, marginBottom: 8, backgroundColor: "#101010", opacity: olderLoading || !hasOlder ? 0.55 : 1 }}><T style={{ textAlign: "center", fontWeight: "600" }}>{olderLoading ? "Syncing older messages…" : hasOlder ? "Load older messages" : "All available messages loaded"}</T></Pressable>}
             <FlatList
-              data={addresses}
-              keyExtractor={(addr) => addr}
+              data={navItems}
+              keyExtractor={(item) => item.type === "folder" ? `folder:${item.folder.id}` : `inbox:${item.address}`}
               ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-              renderItem={({ item: address }) => {
+              renderItem={({ item: navItem }) => {
+                if (navItem.type === "folder") {
+                  const isCollapsed = collapsedFolders.includes(navItem.folder.id);
+                  return <Pressable onPress={() => toggleInboxFolder(navItem.folder.id)} style={{ padding: 9, backgroundColor: "#101010", borderRadius: 8, borderWidth: 1, borderColor: "#252525" }}><T style={{ fontWeight: "700" }}>{isCollapsed ? "+" : "−"} {navItem.folder.name} <T style={{ color: "#777", fontWeight: "400" }}>({navItem.folder.inboxes.length})</T></T></Pressable>;
+                }
+                const address = navItem.address;
                 const list = groups[address];
                 const latest = list.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
                 const selected = address === selectedAddress;
@@ -189,6 +226,7 @@ export default function Index() {
                     }}
                     style={({ pressed }) => ({
                       padding: 10,
+                      paddingLeft: navItem.folderId ? 22 : 10,
                       backgroundColor: selected ? "#0f0f0f" : pressed ? "#0a0a0a" : "#050505",
                       borderRadius: 10,
                       borderWidth: 1,
@@ -210,6 +248,10 @@ export default function Index() {
             <Heading style={{ fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
               <TypewriterText text="Messages" startDelayMs={600} pauseAtEndMs={0} />
             </Heading>
+            <View style={{ flexDirection: isNarrow ? "column" : "row", gap: 6, marginBottom: 8 }}>
+              <TextInput value={messageSearch} onChangeText={setMessageSearch} placeholder="Filter by sender, subject, or text" placeholderTextColor="#666" style={{ flex: 1, minWidth: 0, backgroundColor: "#0a0a0a", borderColor: "#252525", borderWidth: 1, borderRadius: 7, padding: 8, color: "#fff" }} />
+              <Pressable onPress={() => setMessageSort((sort) => sort === "newest" ? "oldest" : sort === "oldest" ? "sender" : sort === "sender" ? "subject" : "newest")} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, justifyContent: "center", minHeight: 38 }}><T>Sort: {messageSort === "newest" ? "Newest" : messageSort === "oldest" ? "Oldest" : messageSort === "sender" ? "Sender" : "Subject"}</T></Pressable>
+            </View>
             {selectedAddress ? (
               <FlatList
                 data={messages}

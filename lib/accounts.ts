@@ -84,6 +84,33 @@ export function makeId(prefix: string = "acct"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+export async function getValidGmailAccount(account: GmailAccount): Promise<GmailAccount> {
+  if (account.expiresAt && account.expiresAt > Date.now() + 60_000) return account;
+  if (!account.refreshToken) {
+    if (account.expiresAt && account.expiresAt <= Date.now()) throw new Error("Gmail session expired. Reconnect this account to renew access.");
+    return account;
+  }
+  const clientId = Platform.OS === "ios"
+    ? process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID
+    : Platform.OS === "android"
+      ? process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
+      : process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+  if (!clientId) throw new Error("Google OAuth client ID is not configured for this platform.");
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: clientId, grant_type: "refresh_token", refresh_token: account.refreshToken }).toString(),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.access_token) {
+    if (result.error === "invalid_grant") throw new Error("Gmail refresh token was revoked or expired. Reconnect this account.");
+    throw new Error(result.error_description || `Google token refresh failed: HTTP ${response.status}`);
+  }
+  const updated: GmailAccount = { ...account, accessToken: result.access_token, expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000 };
+  await updateAccount(account.id, updated);
+  return updated;
+}
+
 export async function verifyGmailAccessToken(token: string): Promise<{ ok: boolean; email?: string; error?: string }> {
   try {
     const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {

@@ -28,6 +28,7 @@ import {
   resolveInbox,
 } from "@/lib/alias_rules";
 import { loadUnresolvedAddresses, saveUnresolvedAddresses } from "@/lib/email_utils";
+import { InboxFolder, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
 import "./node-editor.css";
 
 // ── tiny uid ────────────────────────────────────────────────────────────────
@@ -46,7 +47,8 @@ type InboxData = {
   name: string;
 };
 
-type NodeData = PatternData | InboxData;
+type FolderData = { kind: "folder"; name: string; collapsed: boolean };
+type NodeData = PatternData | InboxData | FolderData;
 
 // ── node renderers ────────────────────────────────────────────────────────────
 function PatternNode({ id, data }: NodeProps<Node<PatternData>>) {
@@ -67,17 +69,24 @@ function InboxNode({ id, data }: NodeProps<Node<InboxData>>) {
     <div className="uec-node uec-node-inbox">
       <Handle type="target" position={Position.Left} id="in" />
       <div className="uec-node-label">{d.name || <em style={{ color: "#a3e6cb" }}>unnamed inbox</em>}</div>
+      <Handle type="source" position={Position.Right} id="out" />
     </div>
   );
+}
+
+function FolderNode({ data }: NodeProps<Node<FolderData>>) {
+  const d = data as FolderData;
+  return <div className="uec-node uec-node-folder"><Handle type="target" position={Position.Left} id="in" /><div className="uec-node-label">{d.collapsed ? "+" : "−"} {d.name || "Unnamed folder"}</div></div>;
 }
 
 const nodeTypes = {
   pattern: PatternNode,
   inbox: InboxNode,
+  folder: FolderNode,
 };
 
 // ── helpers: convert rules ↔ nodes/edges ─────────────────────────────────────
-function rulesToGraph(rules: AliasRule[]) {
+function rulesToGraph(rules: AliasRule[], folders: InboxFolder[] = []) {
   // Each rule = 1 pattern node + 1 inbox node + 1 edge.
   // Multiple rules may share an inbox node if they map to the same name.
   const inboxMap = new Map<string, string>(); // inboxName → nodeId
@@ -121,6 +130,20 @@ function rulesToGraph(rules: AliasRule[]) {
     });
   });
 
+  folders.forEach((folder, index) => {
+    const folderId = `f_${folder.id}`;
+    nodes.push({ id: folderId, type: "folder", position: { x: 900, y: index * 150 + 60 }, data: { kind: "folder", name: folder.name, collapsed: Boolean(folder.collapsed) } });
+    folder.inboxes.forEach((name) => {
+      const inboxId = inboxMap.get(name.trim().toLowerCase());
+      if (!inboxId) return;
+      if (folder.collapsed) {
+        const childIds = new Set([inboxId, ...edges.filter((edge) => edge.target === inboxId).map((edge) => edge.source)]);
+        nodes.forEach((node) => { if (childIds.has(node.id)) node.hidden = true; });
+      }
+      edges.push({ id: `folder_${folder.id}_${inboxId}`, source: inboxId, sourceHandle: "out", target: folderId, targetHandle: "in", animated: false, data: { folderId: folder.id } });
+    });
+  });
+
   return { nodes, edges };
 }
 
@@ -144,6 +167,18 @@ function graphToRules(nodes: Node<NodeData>[], edges: Edge[]): AliasRule[] {
   });
 }
 
+function graphToFolders(nodes: Node<NodeData>[], edges: Edge[]): InboxFolder[] {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return nodes.filter((node) => node.data.kind === "folder").map((folderNode) => {
+    const folder = folderNode.data as FolderData;
+    const inboxes = edges.flatMap((edge) => {
+      const source = nodeMap.get(edge.source);
+      return edge.target === folderNode.id && source?.data.kind === "inbox" ? [(source.data as InboxData).name.trim()] : [];
+    });
+    return { id: folderNode.id.replace(/^f_/, ""), name: folder.name, inboxes, collapsed: folder.collapsed };
+  });
+}
+
 // ── MATCH_TYPES list ──────────────────────────────────────────────────────────
 const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "exact", label: "Exact" },
@@ -158,6 +193,7 @@ const MATCH_TYPES: { type: MatchType; label: string }[] = [
 export function NodeEditor() {
   const [loaded, setLoaded] = useState(false);
   const [rules, setRules] = useState<AliasRule[]>([]);
+  const [folders, setFolders] = useState<InboxFolder[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<NodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
@@ -169,9 +205,10 @@ export function NodeEditor() {
   // ── load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     loadUnresolvedAddresses().then(setUnresolved);
-    loadAliasRules().then((saved) => {
+    Promise.all([loadAliasRules(), loadInboxFolders()]).then(([saved, savedFolders]) => {
       setRules(saved);
-      const { nodes: n, edges: e } = rulesToGraph(saved);
+      setFolders(savedFolders);
+      const { nodes: n, edges: e } = rulesToGraph(saved, savedFolders);
       setNodes(n);
       setEdges(e);
       setLoaded(true);
@@ -185,8 +222,10 @@ export function NodeEditor() {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         const derived = graphToRules(nextNodes, nextEdges);
-        await saveAliasRules(derived);
+        const derivedFolders = graphToFolders(nextNodes, nextEdges);
+        await Promise.all([saveAliasRules(derived), saveInboxFolders(derivedFolders)]);
         setRules(derived);
+        setFolders(derivedFolders);
         setStatus("Saved.");
         setTimeout(() => setStatus(""), 1500);
       }, 400);
@@ -197,6 +236,9 @@ export function NodeEditor() {
   // ── connect: dragging a handle creates an edge (and thus a rule) ──────────
   const onConnect: OnConnect = useCallback(
     (params: Connection) => {
+      const source = nodes.find((node) => node.id === params.source);
+      const target = nodes.find((node) => node.id === params.target);
+      if (!source || !target || !((source.data.kind === "pattern" && target.data.kind === "inbox") || (source.data.kind === "inbox" && target.data.kind === "folder"))) return;
       const newEdge: Edge = {
         ...params,
         id: `e_${uid()}`,
@@ -269,6 +311,28 @@ export function NodeEditor() {
   };
 
   // ── add a new inbox node ──────────────────────────────────────────────────
+  const addFolderNode = () => {
+    const id = `f_${uid()}`;
+    const folder: Node<FolderData> = { id, type: "folder", position: { x: 900, y: 60 + nodes.filter((n) => n.data.kind === "folder").length * 150 }, data: { kind: "folder", name: "New folder", collapsed: false } };
+    const next = [...nodes, folder];
+    setNodes(next);
+    setEditingId(id);
+    setEditFolderName("New folder");
+    persist(next, edges);
+  };
+
+  const toggleFolder = (folderNode: Node<NodeData>) => {
+    if (folderNode.data.kind !== "folder") return;
+    const collapsed = !folderNode.data.collapsed;
+    const inboxIds = new Set(edges.filter((edge) => edge.target === folderNode.id).map((edge) => edge.source));
+    const childIds = new Set([...inboxIds, ...edges.filter((edge) => inboxIds.has(edge.target)).map((edge) => edge.source)]);
+    const next = nodes.map((node) => node.id === folderNode.id
+      ? { ...node, data: { ...node.data, collapsed } as FolderData }
+      : childIds.has(node.id) ? { ...node, hidden: collapsed } : node);
+    setNodes(next);
+    persist(next, edges);
+  };
+
   const addInboxNode = () => {
     const id = `i_${uid()}`;
     const next: Node<InboxData> = {
@@ -287,10 +351,35 @@ export function NodeEditor() {
     const inboxes = nodes.filter((node) => node.data.kind === "inbox").sort((a, b) => String((a.data as InboxData).name).localeCompare(String((b.data as InboxData).name)));
     const arranged = nodes.map((node) => {
       if (node.data.kind === "pattern") return { ...node, position: { x: 80, y: 60 + patterns.indexOf(node) * 115 } };
-      return { ...node, position: { x: 520, y: 60 + inboxes.indexOf(node) * 130 } };
+      if (node.data.kind === "inbox") return { ...node, position: { x: 520, y: 60 + inboxes.indexOf(node) * 130 } };
+      return { ...node, position: { x: 960, y: 60 + nodes.filter((n) => n.data.kind === "folder").indexOf(node) * 150 } };
     });
     setNodes(arranged);
     persist(arranged, edges);
+  };
+
+  const addOtherCatchAll = () => {
+    if (rules.some((rule) => rule.matchType === "all" && rule.enabled)) return;
+    const nextNodes = [...nodes];
+    const nextEdges = [...edges];
+    let folder = nextNodes.find((node) => node.data.kind === "folder" && node.data.name.toLowerCase() === "other") as Node<FolderData> | undefined;
+    if (!folder) {
+      folder = { id: `f_${uid()}`, type: "folder", position: { x: 960, y: 300 }, data: { kind: "folder", name: "Other", collapsed: false } };
+      nextNodes.push(folder);
+    }
+    let otherInbox = nextNodes.find((node) => node.data.kind === "inbox" && node.data.name.toLowerCase() === "other") as Node<InboxData> | undefined;
+    if (!otherInbox) {
+      otherInbox = { id: `i_${uid()}`, type: "inbox", position: { x: 520, y: 500 }, data: { kind: "inbox", name: "Other" } };
+      nextNodes.push(otherInbox);
+    }
+    const ruleId = uid();
+    const pattern: Node<PatternData> = { id: `p_${ruleId}`, type: "pattern", position: { x: 80, y: 60 + nextNodes.filter((node) => node.data.kind === "pattern").length * 115 }, data: { kind: "pattern", alias: "", matchType: "all", enabled: true } };
+    nextNodes.push(pattern);
+    nextEdges.push({ id: `e_${ruleId}`, source: pattern.id, sourceHandle: "out", target: otherInbox.id, targetHandle: "in", markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" }, style: { stroke: "#3b82f6", strokeWidth: 2 }, data: { ruleId } });
+    for (const inbox of nextNodes.filter((node) => node.data.kind === "inbox")) {
+      if (!nextEdges.some((edge) => edge.source === inbox.id && edge.target === folder!.id)) nextEdges.push({ id: `folder_${uid()}`, source: inbox.id, sourceHandle: "out", target: folder.id, targetHandle: "in", data: { folderId: folder.id } });
+    }
+    setNodes(nextNodes); setEdges(nextEdges); persist(nextNodes, nextEdges);
   };
 
   const addExactRouteForAddress = (address: string) => {
@@ -316,6 +405,7 @@ export function NodeEditor() {
   const [editAlias, setEditAlias] = useState("");
   const [editMatchType, setEditMatchType] = useState<MatchType>("exact");
   const [editInboxName, setEditInboxName] = useState("");
+  const [editFolderName, setEditFolderName] = useState("");
   const [editEnabled, setEditEnabled] = useState(true);
 
   const openEdit = (node: Node<NodeData>) => {
@@ -324,8 +414,10 @@ export function NodeEditor() {
       setEditAlias(node.data.alias);
       setEditMatchType(node.data.matchType);
       setEditEnabled(node.data.enabled !== false);
-    } else {
+    } else if (node.data.kind === "inbox") {
       setEditInboxName(node.data.name);
+    } else {
+      setEditFolderName(node.data.name);
     }
   };
 
@@ -341,12 +433,10 @@ export function NodeEditor() {
           ? { ...n, data: { ...n.data, alias: editAlias, matchType: editMatchType, enabled: editEnabled } as PatternData }
           : n
       );
+    } else if (target.data.kind === "inbox") {
+      nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, name: editInboxName } as InboxData } : n);
     } else {
-      nextNodes = nodes.map((n) =>
-        n.id === editingId
-          ? { ...n, data: { ...n.data, name: editInboxName } as InboxData }
-          : n
-      );
+      nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, name: editFolderName } as FolderData } : n);
     }
     setNodes(nextNodes);
     setEditingId(null);
@@ -381,9 +471,9 @@ export function NodeEditor() {
           <button type="button" onClick={addPatternNode} className="uec-btn-add-pattern">
             + Pattern
           </button>
-          <button type="button" onClick={addInboxNode} className="uec-btn-add-inbox">
-            + Inbox
-          </button>
+          <button type="button" onClick={addInboxNode} className="uec-btn-add-inbox">+ Inbox</button>
+          <button type="button" onClick={addFolderNode} className="uec-btn-secondary">+ Folder</button>
+          <button type="button" onClick={addOtherCatchAll} className="uec-btn-secondary" disabled={rules.some((rule) => rule.matchType === "all" && rule.enabled)}>Add Other catch-all</button>
         </div>
         {status && <span role="status" className="uec-status">{status}</span>}
       </div>
@@ -444,16 +534,15 @@ export function NodeEditor() {
                 Enabled
               </label>
             </>
-          ) : (
+          ) : editingNode.data.kind === "inbox" ? (
             <label>
               Inbox name
-              <input
-                autoFocus
-                placeholder="Finance, Work, Newsletters…"
-                value={editInboxName}
-                onChange={(e) => setEditInboxName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
-              />
+              <input autoFocus placeholder="Finance, Work, Newsletters…" value={editInboxName} onChange={(e) => setEditInboxName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }} />
+            </label>
+          ) : (
+            <label>
+              Folder name
+              <input autoFocus placeholder="Other, Work…" value={editFolderName} onChange={(e) => setEditFolderName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }} />
             </label>
           )}
           <div style={{ display: "flex", gap: 8 }}>
@@ -475,6 +564,7 @@ export function NodeEditor() {
           onEdgesDelete={onEdgesDelete}
           onNodesDelete={onNodesDelete}
           onNodeDoubleClick={onNodeDoubleClick}
+          onNodeClick={(_, node) => { if (node.data.kind === "folder") toggleFolder(node as Node<NodeData>); }}
           deleteKeyCode={["Delete", "Backspace"]}
           fitView
           fitViewOptions={{ padding: 0.2 }}

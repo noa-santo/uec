@@ -1,5 +1,5 @@
 import {Email} from "./email_utils";
-import {GmailAccount, MailAccount} from "./accounts";
+import {GmailAccount, MailAccount, getValidGmailAccount} from "./accounts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {Platform} from "react-native";
 
@@ -116,6 +116,7 @@ export async function fetchGmailEmails(
   pageToken?: string,
   onlyOneMonth: boolean = false
 ): Promise<{ emails: Email[]; nextPageToken?: string; reachedOneMonthAgo?: boolean }> {
+  account = await getValidGmailAccount(account);
   const headers = { Authorization: `Bearer ${account.accessToken}` } as const;
   let url = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}`;
   if (pageToken) url += `&pageToken=${pageToken}`;
@@ -212,6 +213,7 @@ export async function fetchOlderGmailEmails(account: GmailAccount, firstPageToke
   const cachedList = account.email ? await getCachedEmailList(account.email) : undefined;
   let token = firstPageToken || cachedList?.nextPageToken;
   for (let page = 0; token && page < maxPages; page++) {
+    account = await getValidGmailAccount(account);
     const result = await fetchGmailEmails(account, 50, token, false);
     collected.push(...result.emails);
     token = result.nextPageToken;
@@ -246,6 +248,7 @@ export async function fetchAllEmailsFromAccounts(accounts: MailAccount[], onOlde
 export async function fetchGmailEmailById(account: GmailAccount, id: string): Promise<Email | undefined> {
   const cached = await getCachedEmail(id);
   if (cached) return cached;
+  account = await getValidGmailAccount(account);
   const headers = { Authorization: `Bearer ${account.accessToken}` } as const;
   const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, { headers });
   if (!msgRes.ok) {

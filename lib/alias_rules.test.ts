@@ -45,6 +45,15 @@ test("regex pattern routing", () => {
   assert.equal(resolveInbox("app-xyz@test.io", rules), "app-xyz@test.io");
 });
 
+test("catch-all routes only unmatched addresses after specific rules", () => {
+  const rules: AliasRule[] = [
+    { id: "catch", alias: "", matchType: "all", inbox: "Other", enabled: true },
+    { id: "exact", alias: "billing@shop.com", matchType: "exact", inbox: "Finance", enabled: true },
+  ];
+  assert.equal(resolveInbox("billing@shop.com", rules), "Finance");
+  assert.equal(resolveInbox("news@example.com", rules), "Other");
+});
+
 test("disabled rules are skipped", () => {
   const rules: AliasRule[] = [
     { id: "1", alias: "work@corp.com", matchType: "exact", inbox: "Work", enabled: false },

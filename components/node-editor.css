@@ -149,6 +149,7 @@
 .uec-node:active { cursor: grabbing; }
 .uec-node-disabled { opacity: 0.45; border-style: dashed; }
 .uec-node-inbox   { background: #064e3b; border-color: #10b981; }
+.uec-node-folder { background: #181818; border-color: #a3a3a3; min-width: 190px; }
 .uec-node-pattern { border-color: #38bdf8; }
 
 .uec-node-label {

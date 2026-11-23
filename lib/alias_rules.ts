@@ -125,10 +125,9 @@ export async function saveAliasRules(rules: AliasRule[]): Promise<void> {
 
 export function resolveInbox(address: string, rules: AliasRule[]): string {
   const normalized = normalizeAddress(address);
-  for (const rule of rules) {
-    if (testRuleMatch(normalized, rule)) {
-      return rule.inbox;
-    }
+  const orderedRules = [...rules.filter((rule) => (rule.matchType || "exact") !== "all"), ...rules.filter((rule) => (rule.matchType || "exact") === "all")];
+  for (const rule of orderedRules) {
+    if (testRuleMatch(normalized, rule)) return rule.inbox;
   }
   return normalized;
 }
