@@ -8,6 +8,7 @@ const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "prefix", label: "Prefix" },
   { type: "contains", label: "Contains" },
   { type: "regex", label: "Regex" },
+  { type: "all", label: "Catch all" },
 ];
 
 export function NodeEditor() {
@@ -26,7 +27,7 @@ export function NodeEditor() {
   const add = async () => {
     const nextRule: AliasRule = {
       id: `rule_${Date.now()}`,
-      alias: alias.trim(),
+      alias: matchType === "all" ? "" : alias.trim(),
       matchType,
       inbox: inbox.trim(),
       enabled: true,
@@ -37,7 +38,8 @@ export function NodeEditor() {
       return setStatus("That pattern already has a rule.");
     }
     const next = [...rules, nextRule];
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (!saved.ok) return setStatus("Storage is full — route kept for this session only.");
     setRules(next);
     setAlias("");
     setInbox("");
@@ -89,7 +91,7 @@ export function NodeEditor() {
         ))}
       </View>
 
-      <TextInput
+      {matchType !== "all" && <TextInput
         accessibilityLabel="Alias pattern"
         placeholder={
           matchType === "domain"
@@ -106,7 +108,7 @@ export function NodeEditor() {
         value={alias}
         onChangeText={setAlias}
         style={{ color: "#fff", backgroundColor: "#111a28", borderColor: "#34445b", borderWidth: 1, borderRadius: 6, padding: 10, marginBottom: 10 }}
-      />
+      />}
       <TextInput
         accessibilityLabel="Virtual inbox"
         placeholder="Destination Virtual Inbox (e.g. Work, Newsletters, Finance)"

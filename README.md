@@ -46,6 +46,22 @@ The Alias Node Editor supports flexible routing types:
 
 An interactive test resolver is built directly into the node editor so you can verify addresses instantly.
 
+### Node editor
+
+The web node editor has a node-type sidebar with tabs (Conditions, Logic, Inboxes). Clicking a type creates that node in the centre of the current view and opens its configuration dialog. Double-click a node to edit it again; drag between handles to connect nodes. Configuration changes are saved automatically.
+
+Folder nodes are purely configuration: they group virtual inboxes in the main view but never hide nodes or edges in the graph. Enable **Include catch-all / unsorted inboxes** on a folder to collect every virtual inbox created by a catch-all rule — including dynamic names derived from sender, subject or sender domain. Folders that already contain the catch-all rule's inbox name (for example, "Other") collect those inboxes automatically. Those folders show the real inbox and message counts and can be opened to read all their messages together.
+
+Resolver suggestions include every message in the local mail cache, not only the most recent page, so older addresses without a specific rule can be routed at any time. Use **Refresh suggestions** in the editor to rescan.
+
+### Main view
+
+Virtual inboxes and folders can be searched and sorted by name, message count, or newest message. Column dividers can be dragged to resize columns (web), and each column can be collapsed with its header button; the layout is remembered between sessions.
+
+### Storage
+
+Settings and cached messages go through a quota-aware storage facade. Gmail bodies are capped and old cache entries are evicted when browser storage fills up, so saving node routes can no longer crash with "Quota exceeded" — a failed write is reported in the editor status instead.
+
 ## Scripts
 - `pnpm start` — start the dev server
 - `pnpm test` — run unit test suite

@@ -1,6 +1,5 @@
-import * as SecureStore from "expo-secure-store";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {Platform} from "react-native";
+import { getItem, setItem } from "./storage";
 
 export type Protocol = "imap" | "pop3";
 
@@ -34,10 +33,7 @@ export type MailAccount = GmailAccount | ManualAccount;
 const KEY = "uec.accounts";
 
 export async function getAccounts(): Promise<MailAccount[]> {
-  const raw =
-    Platform.OS === "web"
-      ? await AsyncStorage.getItem(KEY)
-      : await SecureStore.getItemAsync(KEY);
+  const raw = await getItem(KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as MailAccount[];
@@ -48,12 +44,7 @@ export async function getAccounts(): Promise<MailAccount[]> {
 }
 
 async function saveAccounts(list: MailAccount[]): Promise<void> {
-  const data = JSON.stringify(list);
-  if (Platform.OS === "web") {
-    await AsyncStorage.setItem(KEY, data);
-  } else {
-    await SecureStore.setItemAsync(KEY, data);
-  }
+  await setItem(KEY, JSON.stringify(list));
 }
 
 export async function addAccount(acc: MailAccount): Promise<void> {
