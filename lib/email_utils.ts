@@ -12,7 +12,7 @@ export type Email = {
   bodyHtml?: string; // text/html content when available
 };
 
-import { AliasRule, resolveInbox } from "./alias_rules";
+import { AliasRule, resolveInbox, testRuleMatch } from "./alias_rules";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const UNRESOLVED_KEY = "uec.unresolvedAddresses.v1";
@@ -28,7 +28,15 @@ export async function saveUnresolvedAddresses(addresses: string[]): Promise<void
 
 export function groupByToAddress(list: Email[], rules: AliasRule[] = []): Record<string, Email[]> {
   return list.reduce((acc, e) => {
-    const inbox = resolveInbox(e.to, rules);
+    const matchedRule = rules.find((rule) => testRuleMatch(e.to, rule, e));
+    const fallbackInbox = resolveInbox(e.to, rules, e);
+    let inbox = fallbackInbox;
+    if (matchedRule?.outputMode === "subject") inbox = e.subject.trim() || matchedRule.inbox;
+    else if (matchedRule?.outputMode === "sender") inbox = e.from.trim() || matchedRule.inbox;
+    else if (matchedRule?.outputMode === "senderDomain") {
+      const sender = e.from.match(/@([^>\s]+)/)?.[1]?.replace(/[>].*$/, "");
+      inbox = sender || matchedRule.inbox;
+    }
     (acc[inbox] ||= []).push(e);
     return acc;
   }, {} as Record<string, Email[]>);

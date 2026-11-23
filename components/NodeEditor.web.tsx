@@ -33,29 +33,42 @@ import "./node-editor.css";
 
 // ── tiny uid ────────────────────────────────────────────────────────────────
 const uid = () => Math.random().toString(36).slice(2, 9);
+function upstreamNodeIds(targetIds: Set<string>, edges: Edge[]): Set<string> {
+  const result = new Set(targetIds);
+  const queue = [...targetIds];
+  while (queue.length) {
+    const target = queue.pop()!;
+    for (const edge of edges) if (edge.target === target && !result.has(edge.source)) { result.add(edge.source); queue.push(edge.source); }
+  }
+  return result;
+}
 
 // ── node data shapes ─────────────────────────────────────────────────────────
 type PatternData = {
   kind: "pattern";
   alias: string;
   matchType: MatchType;
+  field: "recipient" | "sender" | "subject" | "body";
   enabled: boolean;
 };
 
 type InboxData = {
   kind: "inbox";
   name: string;
+  outputMode: "static" | "subject" | "sender" | "senderDomain";
 };
+type LogicData = { kind: "logic"; operator: "and" | "or"; name: string };
 
 type FolderData = { kind: "folder"; name: string; collapsed: boolean };
-type NodeData = PatternData | InboxData | FolderData;
+type NodeData = PatternData | InboxData | FolderData | LogicData;
 
 // ── node renderers ────────────────────────────────────────────────────────────
 function PatternNode({ id, data }: NodeProps<Node<PatternData>>) {
   const d = data as PatternData;
   return (
     <div className={`uec-node uec-node-pattern ${d.enabled === false ? "uec-node-disabled" : ""}`}>
-      <div className="uec-badge">{d.matchType}</div>
+      <Handle type="target" position={Position.Left} id="in" />
+      <div className="uec-badge">{d.field} · {d.matchType}</div>
       <div className="uec-node-label">{d.alias || <em style={{ color: "#64748b" }}>no pattern</em>}</div>
       {/* outgoing: pattern → inbox */}
       <Handle type="source" position={Position.Right} id="out" />
@@ -68,21 +81,28 @@ function InboxNode({ id, data }: NodeProps<Node<InboxData>>) {
   return (
     <div className="uec-node uec-node-inbox">
       <Handle type="target" position={Position.Left} id="in" />
+      <div className="uec-badge">{d.outputMode === "static" ? "fixed output" : `title from ${d.outputMode}`}</div>
       <div className="uec-node-label">{d.name || <em style={{ color: "#a3e6cb" }}>unnamed inbox</em>}</div>
       <Handle type="source" position={Position.Right} id="out" />
     </div>
   );
 }
 
+function LogicNode({ data }: NodeProps<Node<LogicData>>) {
+  const d = data as LogicData;
+  return <div className="uec-node uec-node-logic"><Handle type="target" position={Position.Left} id="in" /><div className="uec-badge">{d.operator.toUpperCase()}</div><div className="uec-node-label">{d.name || `${d.operator.toUpperCase()} conditions`}</div><Handle type="source" position={Position.Right} id="out" /></div>;
+}
+
 function FolderNode({ data }: NodeProps<Node<FolderData>>) {
   const d = data as FolderData;
-  return <div className="uec-node uec-node-folder"><Handle type="target" position={Position.Left} id="in" /><div className="uec-node-label">{d.collapsed ? "+" : "−"} {d.name || "Unnamed folder"}</div></div>;
+  return <div className="uec-node uec-node-folder"><Handle type="target" position={Position.Left} id="in" /><div className="uec-node-label">{d.collapsed ? "+" : "−"} {d.name || "Unnamed folder"}</div><Handle type="source" position={Position.Right} id="out" /></div>;
 }
 
 const nodeTypes = {
   pattern: PatternNode,
   inbox: InboxNode,
   folder: FolderNode,
+  logic: LogicNode,
 };
 
 // ── helpers: convert rules ↔ nodes/edges ─────────────────────────────────────
@@ -95,52 +115,40 @@ function rulesToGraph(rules: AliasRule[], folders: InboxFolder[] = []) {
   const edges: Edge[] = [];
 
   rules.forEach((rule, i) => {
-    const pid = `p_${rule.id}`;
-    nodes.push({
-      id: pid,
-      type: "pattern",
-      position: { x: 80, y: i * 120 + 60 },
-      data: { kind: "pattern", alias: rule.alias, matchType: rule.matchType || "exact", enabled: rule.enabled },
+    const conditions = rule.conditions?.length ? rule.conditions : [{ alias: rule.alias, matchType: rule.matchType || "exact", field: rule.field || "recipient" as const }];
+    const patternIds = conditions.map((condition, conditionIndex) => {
+      const id = `p_${rule.id}_${conditionIndex}`;
+      nodes.push({ id, type: "pattern", position: { x: 80, y: i * 150 + conditionIndex * 70 + 60 }, data: { kind: "pattern", alias: condition.alias, matchType: condition.matchType || "exact", field: condition.field || "recipient", enabled: rule.enabled } });
+      return id;
     });
-
     const key = rule.inbox.trim().toLowerCase();
     if (!inboxMap.has(key)) {
       const iid = `i_${uid()}`;
       inboxMap.set(key, iid);
-      nodes.push({
-        id: iid,
-        type: "inbox",
-        position: { x: 500, y: inboxMap.size * 130 - 70 },
-        data: { kind: "inbox", name: rule.inbox },
-      });
+      nodes.push({ id: iid, type: "inbox", position: { x: 520, y: inboxMap.size * 130 - 70 }, data: { kind: "inbox", name: rule.inbox, outputMode: rule.outputMode || "static" } });
     }
-
-    const iid = inboxMap.get(key)!;
-    edges.push({
-      id: `e_${rule.id}`,
-      source: pid,
-      sourceHandle: "out",
-      target: iid,
-      targetHandle: "in",
-      animated: rule.enabled,
-      markerEnd: { type: MarkerType.ArrowClosed, color: rule.enabled ? "#3b82f6" : "#475569" },
-      style: { stroke: rule.enabled ? "#3b82f6" : "#475569", strokeWidth: 2 },
-      // store rule id so we can look it up on delete
-      data: { ruleId: rule.id },
-    });
+    const inboxId = inboxMap.get(key)!;
+    let outputId = patternIds[0];
+    if (patternIds.length > 1) {
+      outputId = `l_${rule.id}`;
+      nodes.push({ id: outputId, type: "logic", position: { x: 360, y: i * 150 + 60 }, data: { kind: "logic", operator: rule.logic || "and", name: (rule.logic || "and").toUpperCase() } });
+      patternIds.forEach((patternId, index) => edges.push({ id: `e_${rule.id}_condition_${index}`, source: patternId, sourceHandle: "out", target: outputId, targetHandle: "in", data: { ruleId: `${rule.id}_condition_${index}` } }));
+    }
+    edges.push({ id: `e_${rule.id}`, source: outputId, sourceHandle: "out", target: inboxId, targetHandle: "in", animated: rule.enabled, markerEnd: { type: MarkerType.ArrowClosed, color: rule.enabled ? "#3b82f6" : "#475569" }, style: { stroke: rule.enabled ? "#3b82f6" : "#475569", strokeWidth: 2 }, data: { ruleId: rule.id } });
   });
 
   folders.forEach((folder, index) => {
     const folderId = `f_${folder.id}`;
     nodes.push({ id: folderId, type: "folder", position: { x: 900, y: index * 150 + 60 }, data: { kind: "folder", name: folder.name, collapsed: Boolean(folder.collapsed) } });
+    const isFlowFolder = edges.some((edge) => edge.source === folderId);
     folder.inboxes.forEach((name) => {
       const inboxId = inboxMap.get(name.trim().toLowerCase());
       if (!inboxId) return;
       if (folder.collapsed) {
-        const childIds = new Set([inboxId, ...edges.filter((edge) => edge.target === inboxId).map((edge) => edge.source)]);
+        const childIds = upstreamNodeIds(new Set([inboxId]), edges);
         nodes.forEach((node) => { if (childIds.has(node.id)) node.hidden = true; });
       }
-      edges.push({ id: `folder_${folder.id}_${inboxId}`, source: inboxId, sourceHandle: "out", target: folderId, targetHandle: "in", animated: false, data: { folderId: folder.id } });
+      if (!isFlowFolder) edges.push({ id: `folder_${folder.id}_${inboxId}`, source: inboxId, sourceHandle: "out", target: folderId, targetHandle: "in", animated: false, data: { folderId: folder.id } });
     });
   });
 
@@ -151,19 +159,28 @@ function rulesToGraph(rules: AliasRule[], folders: InboxFolder[] = []) {
 // Edges connect pattern nodes → inbox nodes; the rule attributes live on the pattern node.
 function graphToRules(nodes: Node<NodeData>[], edges: Edge[]): AliasRule[] {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const collect = (nodeId: string, visited = new Set<string>()): Array<{ alias: string; matchType: MatchType; field: PatternData["field"] }> => {
+    if (visited.has(nodeId)) return [];
+    visited.add(nodeId);
+    const node = nodeMap.get(nodeId);
+    if (!node) return [];
+    if (node.data.kind === "pattern") return [{ alias: node.data.alias, matchType: node.data.matchType, field: node.data.field }, ...edges.filter((edge) => edge.target === nodeId).flatMap((edge) => collect(edge.source, new Set(visited)))];
+    if (node.data.kind !== "logic" && node.data.kind !== "folder") return [];
+    return edges.filter((edge) => edge.target === nodeId).flatMap((edge) => collect(edge.source, new Set(visited)));
+  };
   return edges.flatMap((edge) => {
     const src = nodeMap.get(edge.source);
     const tgt = nodeMap.get(edge.target);
-    if (!src || !tgt || src.data.kind !== "pattern" || tgt.data.kind !== "inbox") return [];
-    const pd = src.data as PatternData;
-    const id_ = (edge.data as any)?.ruleId || uid();
-    return [{
-      id: id_,
-      alias: pd.alias,
-      matchType: pd.matchType,
-      inbox: (tgt.data as InboxData).name,
-      enabled: pd.enabled !== false,
-    }];
+    if (!src || !tgt || tgt.data.kind !== "inbox" || (src.data.kind !== "pattern" && src.data.kind !== "logic" && src.data.kind !== "folder")) return [];
+    const conditions = collect(src.id);
+    if (!conditions.length) return [];
+    const ruleId = (edge.data as any)?.ruleId || uid();
+    const logic = src.data.kind === "logic" ? src.data.operator : src.data.kind === "folder" ? "and" : undefined;
+    const first = conditions[0];
+    return [{ id: ruleId, alias: first.alias, matchType: first.matchType, field: first.field, conditions: conditions.length > 1 || first.field !== "recipient" ? conditions : undefined, logic, inbox: (tgt.data as InboxData).name, outputMode: (tgt.data as InboxData).outputMode, enabled: src.data.kind === "pattern" ? (src.data as PatternData).enabled !== false : conditions.every((condition) => {
+      const conditionNode = nodes.find((n) => n.data.kind === "pattern" && n.data.alias === condition.alias);
+      return (conditionNode?.data as PatternData | undefined)?.enabled !== false;
+    }) }];
   });
 }
 
@@ -171,11 +188,23 @@ function graphToFolders(nodes: Node<NodeData>[], edges: Edge[]): InboxFolder[] {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return nodes.filter((node) => node.data.kind === "folder").map((folderNode) => {
     const folder = folderNode.data as FolderData;
-    const inboxes = edges.flatMap((edge) => {
+    const inboxes = new Set(edges.flatMap((edge) => {
       const source = nodeMap.get(edge.source);
       return edge.target === folderNode.id && source?.data.kind === "inbox" ? [(source.data as InboxData).name.trim()] : [];
-    });
-    return { id: folderNode.id.replace(/^f_/, ""), name: folder.name, inboxes, collapsed: folder.collapsed };
+    }));
+    const visited = new Set<string>();
+    const queue = [folderNode.id];
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const edge of edges.filter((item) => item.source === current)) {
+        const target = nodeMap.get(edge.target);
+        if (target?.data.kind === "inbox") inboxes.add(target.data.name.trim());
+        else queue.push(edge.target);
+      }
+    }
+    return { id: folderNode.id.replace(/^f_/, ""), name: folder.name, inboxes: [...inboxes], collapsed: folder.collapsed };
   });
 }
 
@@ -196,6 +225,40 @@ export function NodeEditor() {
   const [folders, setFolders] = useState<InboxFolder[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<NodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const historyRef = useRef<Array<{ nodes: Node<NodeData>[]; edges: Edge[] }>>([]);
+  const redoRef = useRef<Array<{ nodes: Node<NodeData>[]; edges: Edge[] }>>([]);
+  const [, setHistoryVersion] = useState(0);
+  const pushHistory = (previousNodes = nodes, previousEdges = edges) => {
+    historyRef.current.push({ nodes: previousNodes, edges: previousEdges });
+    if (historyRef.current.length > 100) historyRef.current.shift();
+    redoRef.current = [];
+    setHistoryVersion((version) => version + 1);
+  };
+  const undo = () => {
+    const previous = historyRef.current.pop();
+    if (!previous) return;
+    redoRef.current.push({ nodes, edges });
+    setNodes(previous.nodes); setEdges(previous.edges); persist(previous.nodes, previous.edges);
+    setHistoryVersion((version) => version + 1);
+  };
+  const redo = () => {
+    const next = redoRef.current.pop();
+    if (!next) return;
+    historyRef.current.push({ nodes, edges });
+    setNodes(next.nodes); setEdges(next.edges); persist(next.nodes, next.edges);
+    setHistoryVersion((version) => version + 1);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target?.matches("input, textarea, select, [contenteditable=true]")) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+      else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") { event.preventDefault(); redo(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo]);
 
   const [status, setStatus] = useState("");
   const [testAddress, setTestAddress] = useState("");
@@ -238,7 +301,8 @@ export function NodeEditor() {
     (params: Connection) => {
       const source = nodes.find((node) => node.id === params.source);
       const target = nodes.find((node) => node.id === params.target);
-      if (!source || !target || !((source.data.kind === "pattern" && target.data.kind === "inbox") || (source.data.kind === "inbox" && target.data.kind === "folder"))) return;
+      if (!source || !target || !(["pattern", "logic", "folder"].includes(source.data.kind) && ["pattern", "logic", "folder", "inbox"].includes(target.data.kind)) || source.id === target.id) return;
+      pushHistory();
       const newEdge: Edge = {
         ...params,
         id: `e_${uid()}`,
@@ -251,23 +315,25 @@ export function NodeEditor() {
       setEdges(next);
       persist(nodes, next);
     },
-    [edges, nodes, persist]
+    [edges, nodes, persist, pushHistory]
   );
 
   // ── delete edge → removes route ───────────────────────────────────────────
   const onEdgesDelete: OnEdgesDelete = useCallback(
     (deleted) => {
+      pushHistory();
       const ids = new Set(deleted.map((e) => e.id));
       const next = edges.filter((e) => !ids.has(e.id));
       setEdges(next);
       persist(nodes, next);
     },
-    [edges, nodes, persist]
+    [edges, nodes, persist, pushHistory]
   );
 
   // ── delete node → remove connected edges too ──────────────────────────────
   const onNodesDelete: OnNodesDelete = useCallback(
     (deleted) => {
+      pushHistory();
       const deletedIds = new Set(deleted.map((n) => n.id));
       const nextEdges = edges.filter(
         (e) => !deletedIds.has(e.source) && !deletedIds.has(e.target)
@@ -277,7 +343,7 @@ export function NodeEditor() {
       setNodes(nextNodes);
       persist(nextNodes, nextEdges);
     },
-    [edges, nodes, persist]
+    [edges, nodes, persist, pushHistory]
   );
 
   // ── node change callback: persist on move/label change ────────────────────
@@ -288,21 +354,23 @@ export function NodeEditor() {
       // React Flow emits either a single change or a list depending on event path/version.
       const hasDrag = changeList.some((c: any) => c.type === "position" && !c.dragging);
       if (hasDrag) {
+        pushHistory();
         // nodes state hasn't updated yet; defer one tick
         setTimeout(() => persist(nodes, edges), 0);
       }
     },
-    [onNodesChange, nodes, edges, persist]
+    [onNodesChange, nodes, edges, persist, pushHistory]
   );
 
   // ── add a new pattern node ────────────────────────────────────────────────
   const addPatternNode = () => {
+    pushHistory();
     const id = `p_${uid()}`;
     const next: Node<PatternData> = {
       id,
       type: "pattern",
       position: { x: 80 + Math.random() * 60 - 30, y: 60 + nodes.length * 40 },
-      data: { kind: "pattern", alias: "", matchType: "exact", enabled: true },
+      data: { kind: "pattern", alias: "", matchType: "exact", field: "recipient", enabled: true },
     };
     const nextNodes = [...nodes, next];
     setNodes(nextNodes);
@@ -311,7 +379,16 @@ export function NodeEditor() {
   };
 
   // ── add a new inbox node ──────────────────────────────────────────────────
+  const addLogicNode = () => {
+    pushHistory();
+    const id = `l_${uid()}`;
+    const node: Node<LogicData> = { id, type: "logic", position: { x: 500, y: 60 + nodes.filter((n) => n.data.kind === "logic").length * 140 }, data: { kind: "logic", operator: "and", name: "AND" } };
+    const next = [...nodes, node];
+    setNodes(next); setEditingId(id); setEditLogicOperator("and"); persist(next, edges);
+  };
+
   const addFolderNode = () => {
+    pushHistory();
     const id = `f_${uid()}`;
     const folder: Node<FolderData> = { id, type: "folder", position: { x: 900, y: 60 + nodes.filter((n) => n.data.kind === "folder").length * 150 }, data: { kind: "folder", name: "New folder", collapsed: false } };
     const next = [...nodes, folder];
@@ -323,9 +400,10 @@ export function NodeEditor() {
 
   const toggleFolder = (folderNode: Node<NodeData>) => {
     if (folderNode.data.kind !== "folder") return;
+    pushHistory();
     const collapsed = !folderNode.data.collapsed;
     const inboxIds = new Set(edges.filter((edge) => edge.target === folderNode.id).map((edge) => edge.source));
-    const childIds = new Set([...inboxIds, ...edges.filter((edge) => inboxIds.has(edge.target)).map((edge) => edge.source)]);
+    const childIds = upstreamNodeIds(inboxIds, edges);
     const next = nodes.map((node) => node.id === folderNode.id
       ? { ...node, data: { ...node.data, collapsed } as FolderData }
       : childIds.has(node.id) ? { ...node, hidden: collapsed } : node);
@@ -334,12 +412,13 @@ export function NodeEditor() {
   };
 
   const addInboxNode = () => {
+    pushHistory();
     const id = `i_${uid()}`;
     const next: Node<InboxData> = {
       id,
       type: "inbox",
       position: { x: 500 + Math.random() * 60 - 30, y: 60 + nodes.filter((n) => (n.data as any).kind === "inbox").length * 130 },
-      data: { kind: "inbox", name: "" },
+      data: { kind: "inbox", name: "", outputMode: "static" },
     };
     const nextNodes = [...nodes, next];
     setNodes(nextNodes);
@@ -347,48 +426,27 @@ export function NodeEditor() {
   };
 
   const autoArrangeNodes = () => {
+    pushHistory();
     const patterns = nodes.filter((node) => node.data.kind === "pattern").sort((a, b) => String((a.data as PatternData).alias).localeCompare(String((b.data as PatternData).alias)));
     const inboxes = nodes.filter((node) => node.data.kind === "inbox").sort((a, b) => String((a.data as InboxData).name).localeCompare(String((b.data as InboxData).name)));
     const arranged = nodes.map((node) => {
       if (node.data.kind === "pattern") return { ...node, position: { x: 80, y: 60 + patterns.indexOf(node) * 115 } };
-      if (node.data.kind === "inbox") return { ...node, position: { x: 520, y: 60 + inboxes.indexOf(node) * 130 } };
-      return { ...node, position: { x: 960, y: 60 + nodes.filter((n) => n.data.kind === "folder").indexOf(node) * 150 } };
+      if (node.data.kind === "inbox") return { ...node, position: { x: 620, y: 60 + inboxes.indexOf(node) * 130 } };
+      if (node.data.kind === "logic") return { ...node, position: { x: 350, y: 60 + nodes.filter((n) => n.data.kind === "logic").indexOf(node) * 150 } };
+      return { ...node, position: { x: 1050, y: 60 + nodes.filter((n) => n.data.kind === "folder").indexOf(node) * 150 } };
     });
     setNodes(arranged);
     persist(arranged, edges);
   };
 
-  const addOtherCatchAll = () => {
-    if (rules.some((rule) => rule.matchType === "all" && rule.enabled)) return;
-    const nextNodes = [...nodes];
-    const nextEdges = [...edges];
-    let folder = nextNodes.find((node) => node.data.kind === "folder" && node.data.name.toLowerCase() === "other") as Node<FolderData> | undefined;
-    if (!folder) {
-      folder = { id: `f_${uid()}`, type: "folder", position: { x: 960, y: 300 }, data: { kind: "folder", name: "Other", collapsed: false } };
-      nextNodes.push(folder);
-    }
-    let otherInbox = nextNodes.find((node) => node.data.kind === "inbox" && node.data.name.toLowerCase() === "other") as Node<InboxData> | undefined;
-    if (!otherInbox) {
-      otherInbox = { id: `i_${uid()}`, type: "inbox", position: { x: 520, y: 500 }, data: { kind: "inbox", name: "Other" } };
-      nextNodes.push(otherInbox);
-    }
-    const ruleId = uid();
-    const pattern: Node<PatternData> = { id: `p_${ruleId}`, type: "pattern", position: { x: 80, y: 60 + nextNodes.filter((node) => node.data.kind === "pattern").length * 115 }, data: { kind: "pattern", alias: "", matchType: "all", enabled: true } };
-    nextNodes.push(pattern);
-    nextEdges.push({ id: `e_${ruleId}`, source: pattern.id, sourceHandle: "out", target: otherInbox.id, targetHandle: "in", markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" }, style: { stroke: "#3b82f6", strokeWidth: 2 }, data: { ruleId } });
-    for (const inbox of nextNodes.filter((node) => node.data.kind === "inbox")) {
-      if (!nextEdges.some((edge) => edge.source === inbox.id && edge.target === folder!.id)) nextEdges.push({ id: `folder_${uid()}`, source: inbox.id, sourceHandle: "out", target: folder.id, targetHandle: "in", data: { folderId: folder.id } });
-    }
-    setNodes(nextNodes); setEdges(nextEdges); persist(nextNodes, nextEdges);
-  };
-
   const addExactRouteForAddress = (address: string) => {
     const normalized = address.trim().toLowerCase();
     if (!normalized || rules.some((rule) => rule.matchType === "exact" && rule.alias.toLowerCase() === normalized)) return;
+    pushHistory();
     const ruleId = uid();
     const inboxId = `i_${uid()}`;
-    const pattern: Node<PatternData> = { id: `p_${ruleId}`, type: "pattern", position: { x: 80, y: 80 + nodes.length * 28 }, data: { kind: "pattern", alias: normalized, matchType: "exact", enabled: true } };
-    const inbox: Node<InboxData> = { id: inboxId, type: "inbox", position: { x: 500, y: 80 + nodes.length * 28 }, data: { kind: "inbox", name: normalized } };
+    const pattern: Node<PatternData> = { id: `p_${ruleId}`, type: "pattern", position: { x: 80, y: 80 + nodes.length * 28 }, data: { kind: "pattern", alias: normalized, matchType: "exact", field: "recipient", enabled: true } };
+    const inbox: Node<InboxData> = { id: inboxId, type: "inbox", position: { x: 500, y: 80 + nodes.length * 28 }, data: { kind: "inbox", name: normalized, outputMode: "static" } };
     const edge: Edge = { id: `e_${ruleId}`, source: pattern.id, sourceHandle: "out", target: inboxId, targetHandle: "in", markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" }, style: { stroke: "#3b82f6", strokeWidth: 2 }, data: { ruleId } };
     const nextNodes = [...nodes, pattern, inbox];
     const nextEdges = [...edges, edge];
@@ -404,8 +462,11 @@ export function NodeEditor() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editAlias, setEditAlias] = useState("");
   const [editMatchType, setEditMatchType] = useState<MatchType>("exact");
+  const [editField, setEditField] = useState<PatternData["field"]>("recipient");
   const [editInboxName, setEditInboxName] = useState("");
   const [editFolderName, setEditFolderName] = useState("");
+  const [editOutputMode, setEditOutputMode] = useState<InboxData["outputMode"]>("static");
+  const [editLogicOperator, setEditLogicOperator] = useState<LogicData["operator"]>("and");
   const [editEnabled, setEditEnabled] = useState(true);
 
   const openEdit = (node: Node<NodeData>) => {
@@ -413,9 +474,13 @@ export function NodeEditor() {
     if (node.data.kind === "pattern") {
       setEditAlias(node.data.alias);
       setEditMatchType(node.data.matchType);
+      setEditField(node.data.field || "recipient");
       setEditEnabled(node.data.enabled !== false);
     } else if (node.data.kind === "inbox") {
       setEditInboxName(node.data.name);
+      setEditOutputMode(node.data.outputMode);
+    } else if (node.data.kind === "logic") {
+      setEditLogicOperator(node.data.operator);
     } else {
       setEditFolderName(node.data.name);
     }
@@ -426,15 +491,18 @@ export function NodeEditor() {
     const target = nodes.find((n) => n.id === editingId);
     if (!target) { setEditingId(null); return; }
 
+    pushHistory();
     let nextNodes: Node<NodeData>[];
     if (target.data.kind === "pattern") {
       nextNodes = nodes.map((n) =>
         n.id === editingId
-          ? { ...n, data: { ...n.data, alias: editAlias, matchType: editMatchType, enabled: editEnabled } as PatternData }
+          ? { ...n, data: { ...n.data, alias: editAlias, matchType: editMatchType, field: editField, enabled: editEnabled } as PatternData }
           : n
       );
     } else if (target.data.kind === "inbox") {
-      nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, name: editInboxName } as InboxData } : n);
+      nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, name: editInboxName, outputMode: editOutputMode } as InboxData } : n);
+    } else if (target.data.kind === "logic") {
+      nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, operator: editLogicOperator, name: editLogicOperator.toUpperCase() } as LogicData } : n);
     } else {
       nextNodes = nodes.map((n) => n.id === editingId ? { ...n, data: { ...n.data, name: editFolderName } as FolderData } : n);
     }
@@ -467,13 +535,13 @@ export function NodeEditor() {
       <div className="uec-editor-toolbar">
         <strong>Virtual Inbox Routing</strong>
         <div className="uec-toolbar-actions">
+          <button type="button" onClick={undo} disabled={!historyRef.current.length} title="Undo (Ctrl+Z)">Undo</button>
+          <button type="button" onClick={redo} disabled={!redoRef.current.length} title="Redo (Ctrl+Shift+Z)">Redo</button>
           <button type="button" onClick={autoArrangeNodes} className="uec-btn-secondary" disabled={!nodes.length}>Auto arrange</button>
-          <button type="button" onClick={addPatternNode} className="uec-btn-add-pattern">
-            + Pattern
-          </button>
+          <button type="button" onClick={addPatternNode} className="uec-btn-add-pattern">+ Condition</button>
+          <button type="button" onClick={addLogicNode} className="uec-btn-secondary">+ AND / OR</button>
           <button type="button" onClick={addInboxNode} className="uec-btn-add-inbox">+ Inbox</button>
           <button type="button" onClick={addFolderNode} className="uec-btn-secondary">+ Folder</button>
-          <button type="button" onClick={addOtherCatchAll} className="uec-btn-secondary" disabled={rules.some((rule) => rule.matchType === "all" && rule.enabled)}>Add Other catch-all</button>
         </div>
         {status && <span role="status" className="uec-status">{status}</span>}
       </div>
@@ -506,6 +574,10 @@ export function NodeEditor() {
           {editingNode.data.kind === "pattern" ? (
             <>
               <label>
+                Check field
+                <select value={editField} onChange={(e) => setEditField(e.target.value as PatternData["field"])}><option value="recipient">Recipient address</option><option value="sender">Sender</option><option value="subject">Subject</option><option value="body">Body preview</option></select>
+              </label>
+              <label>
                 Match type
                 <select value={editMatchType} onChange={(e) => setEditMatchType(e.target.value as MatchType)}>
                   {MATCH_TYPES.map((m) => (
@@ -535,10 +607,12 @@ export function NodeEditor() {
               </label>
             </>
           ) : editingNode.data.kind === "inbox" ? (
-            <label>
-              Inbox name
-              <input autoFocus placeholder="Finance, Work, Newsletters…" value={editInboxName} onChange={(e) => setEditInboxName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }} />
-            </label>
+            <>
+              <label>Inbox label<input autoFocus placeholder="Finance, Work…" value={editInboxName} onChange={(e) => setEditInboxName(e.target.value)} /></label>
+              <label>Inbox name from<select value={editOutputMode} onChange={(e) => setEditOutputMode(e.target.value as InboxData["outputMode"])}><option value="static">Fixed name</option><option value="subject">Email subject</option><option value="sender">Sender name/address</option><option value="senderDomain">Sender domain</option></select></label>
+            </>
+          ) : editingNode.data.kind === "logic" ? (
+            <label>Combine conditions<select value={editLogicOperator} onChange={(e) => setEditLogicOperator(e.target.value as LogicData["operator"])}><option value="and">AND — all must match</option><option value="or">OR — any can match</option></select></label>
           ) : (
             <label>
               Folder name

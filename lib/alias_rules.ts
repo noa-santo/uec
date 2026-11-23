@@ -10,6 +10,10 @@ export type AliasRule = {
   matchType?: MatchType;
   inbox: string;
   enabled: boolean;
+  conditions?: Array<{ alias: string; matchType: MatchType; field?: "recipient" | "sender" | "subject" | "body" }>;
+  logic?: "and" | "or";
+  outputMode?: "static" | "subject" | "sender" | "senderDomain";
+  field?: "recipient" | "sender" | "subject" | "body";
 };
 
 const KEY = "uec.aliasRules.v1";
@@ -43,8 +47,14 @@ export function validateRule(rule: Pick<AliasRule, "alias" | "inbox" | "matchTyp
   return undefined;
 }
 
-export function testRuleMatch(address: string, rule: AliasRule): boolean {
+export function testRuleMatch(address: string, rule: AliasRule, email?: { from?: string; subject?: string; body?: string; to?: string }): boolean {
   if (!rule.enabled) return false;
+  const valueFor = (field: AliasRule["field"] = "recipient") => field === "sender" ? (email?.from?.match(/<([^>]+)>/)?.[1] || email?.from || "") : field === "subject" ? (email?.subject || "") : field === "body" ? (email?.body || "") : (email?.to || address);
+  if (rule.conditions?.length) {
+    const outcomes = rule.conditions.map((condition) => testRuleMatch(valueFor(condition.field), { ...rule, alias: condition.alias, matchType: condition.matchType, conditions: undefined, field: undefined }, undefined));
+    return rule.logic === "or" ? outcomes.some(Boolean) : outcomes.every(Boolean);
+  }
+  address = valueFor(rule.field);
   const target = normalizeAddress(address);
   const matchType = rule.matchType || "exact";
   const pattern = rule.alias.trim().toLowerCase();
@@ -92,9 +102,17 @@ function normalizeRules(value: unknown): AliasRule[] {
       matchType,
       inbox: item.inbox.trim(),
       enabled: item.enabled !== false,
+      conditions: Array.isArray(item.conditions) ? item.conditions.filter((condition: any) => condition && typeof condition.alias === "string" && ["exact", "contains", "domain", "prefix", "regex"].includes(condition.matchType)).map((condition: any) => ({ alias: condition.alias.trim(), matchType: condition.matchType as MatchType, field: ["recipient", "sender", "subject", "body"].includes(condition.field) ? condition.field : "recipient" })) : undefined,
+      logic: item.logic === "or" ? "or" : item.logic === "and" ? "and" : undefined,
+      outputMode: ["static", "subject", "sender", "senderDomain"].includes(item.outputMode) ? item.outputMode : "static",
+      field: ["recipient", "sender", "subject", "body"].includes(item.field) ? item.field : "recipient",
     };
-    const key = `${rule.matchType}:${rule.alias.toLowerCase()}`;
-    if (validateRule(rule) || seen.has(key)) return [];
+    const key = `${rule.matchType}:${rule.alias.toLowerCase()}:${rule.inbox.toLowerCase()}:${JSON.stringify(rule.conditions || [])}`;
+    const invalidCondition = rule.conditions?.some((condition) => {
+      if ((condition.field === "subject" || condition.field === "body") && condition.matchType === "exact") return !condition.alias;
+      return Boolean(validateRule({ alias: condition.alias, inbox: rule.inbox, matchType: condition.matchType }));
+    });
+    if ((rule.conditions?.length ? invalidCondition : validateRule(rule)) || seen.has(key)) return [];
     seen.add(key);
     return [rule];
   });
@@ -123,11 +141,11 @@ export async function saveAliasRules(rules: AliasRule[]): Promise<void> {
   await write(JSON.stringify(normalizeRules(rules)));
 }
 
-export function resolveInbox(address: string, rules: AliasRule[]): string {
+export function resolveInbox(address: string, rules: AliasRule[], email?: { from?: string; subject?: string; body?: string; to?: string }): string {
   const normalized = normalizeAddress(address);
   const orderedRules = [...rules.filter((rule) => (rule.matchType || "exact") !== "all"), ...rules.filter((rule) => (rule.matchType || "exact") === "all")];
   for (const rule of orderedRules) {
-    if (testRuleMatch(normalized, rule)) return rule.inbox;
+    if (testRuleMatch(normalized, rule, email)) return rule.inbox;
   }
   return normalized;
 }
