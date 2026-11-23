@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-export type MatchType = "exact" | "contains" | "domain" | "prefix" | "regex";
+export type MatchType = "exact" | "contains" | "domain" | "prefix" | "regex" | "all";
 
 export type AliasRule = {
   id: string;
@@ -24,8 +24,9 @@ export function validateRule(rule: Pick<AliasRule, "alias" | "inbox" | "matchTyp
   const inbox = rule.inbox.trim();
   const matchType = rule.matchType || "exact";
 
-  if (!alias || !inbox) return "Pattern and virtual inbox are required.";
+  if (!inbox || (matchType !== "all" && !alias)) return "Pattern and virtual inbox are required.";
 
+  if (matchType === "all") return undefined;
   if (matchType === "exact") {
     const normalized = normalizeAddress(alias);
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return "Enter a valid email address for exact match.";
@@ -49,6 +50,8 @@ export function testRuleMatch(address: string, rule: AliasRule): boolean {
   const pattern = rule.alias.trim().toLowerCase();
 
   switch (matchType) {
+    case "all":
+      return true;
     case "exact":
       return target === normalizeAddress(rule.alias);
     case "contains":
@@ -80,7 +83,7 @@ function normalizeRules(value: unknown): AliasRule[] {
   const seen = new Set<string>();
   return value.flatMap((item: any) => {
     if (!item || typeof item.id !== "string" || typeof item.alias !== "string" || typeof item.inbox !== "string") return [];
-    const matchType: MatchType = ["exact", "contains", "domain", "prefix", "regex"].includes(item.matchType)
+    const matchType: MatchType = ["exact", "contains", "domain", "prefix", "regex", "all"].includes(item.matchType)
       ? item.matchType
       : "exact";
     const rule: AliasRule = {

@@ -150,6 +150,7 @@ const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "prefix", label: "Prefix (+tags)" },
   { type: "contains", label: "Contains" },
   { type: "regex", label: "Regex" },
+  { type: "all", label: "Catch all" },
 ];
 
 // ── main component ────────────────────────────────────────────────────────────

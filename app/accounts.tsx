@@ -67,7 +67,7 @@ export default function AccountsScreen() {
     iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
-    scopes: ["openid", "email", "profile", "https://mail.google.com/"],
+    scopes: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"],
   });
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -85,11 +85,15 @@ export default function AccountsScreen() {
       if (accessToken) {
         (async () => {
           const verify = await verifyGmailAccessToken(accessToken);
+          if (!verify.ok || !verify.email) {
+            Alert.alert("Gmail sign-in failed", `Could not verify your Google account${verify.error ? ` (${verify.error})` : ""}. Please try connecting again.`);
+            return;
+          }
           const id = makeId("gmail");
           await addAccount({ id, type: "gmail", accessToken, expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined, email: verify.email });
           const list = await getAccounts();
           setAccounts(list);
-          Alert.alert("Gmail account added", verify.email ? `Signed in as ${verify.email}` : "Token stored.");
+          Alert.alert("Gmail account added", `Signed in as ${verify.email}`);
         })();
       } else {
         Alert.alert("Gmail sign-in failed", "No access token returned.");

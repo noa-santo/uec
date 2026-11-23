@@ -1,9 +1,9 @@
 import { FlatList, Pressable, Text, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
 import { useEffect, useMemo, useState } from "react";
-import { Email, groupByToAddress } from "@/lib/email_utils";
+import { Email, groupByToAddress, saveUnresolvedAddresses } from "@/lib/email_utils";
 import { getAccounts, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts } from "@/lib/gmail";
-import { loadAliasRules } from "@/lib/alias_rules";
+import { loadAliasRules, testRuleMatch } from "@/lib/alias_rules";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
@@ -62,6 +62,8 @@ export default function Index() {
         const emails = await fetchAllEmailsFromAccounts(accs);
         setAliasRules(rules);
         setItems(emails);
+        const unresolved = emails.map((email) => email.to).filter((address) => !rules.some((rule) => testRuleMatch(address, rule)));
+        await saveUnresolvedAddresses(unresolved);
       } catch (e: any) {
         setError(String(e?.message || e));
       } finally {

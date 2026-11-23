@@ -172,7 +172,18 @@ export async function fetchGmailEmails(
   // If no cached list, fetch from API
   const listRes = await fetch(url, { headers });
   if (!listRes.ok) {
-    throw new Error(`Gmail list failed: HTTP ${listRes.status}`);
+    let detail = "";
+    try {
+      const payload = await listRes.json();
+      detail = payload?.error?.message || payload?.error_description || "";
+    } catch {}
+    if (listRes.status === 401) {
+      throw new Error("Gmail authorization expired or was revoked. Remove this Gmail account and connect it again.");
+    }
+    if (listRes.status === 403) {
+      throw new Error(`Gmail access denied${detail ? `: ${detail}` : ". Check that Gmail API is enabled for your Google Cloud project and reconnect with Gmail read-only permission."}`);
+    }
+    throw new Error(`Gmail list failed: HTTP ${listRes.status}${detail ? ` — ${detail}` : ""}`);
   }
   const listJson = await listRes.json();
   const ids: string[] = (listJson.messages || []).map((m: any) => m.id);
