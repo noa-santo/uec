@@ -58,12 +58,14 @@
               export HOME="$TMPDIR"
               export XDG_CACHE_HOME="$TMPDIR/.cache"
               export CARGO_HOME="$TMPDIR/.cargo"
-              # Do NOT run `corepack enable`: it tries to symlink into the
-              # read-only Nix store. `corepack pnpm` works without it.
-              corepack pnpm config set store-dir "$TMPDIR/.pnpm-store"
-              corepack pnpm install --frozen-lockfile
-              corepack pnpm exec expo export --platform web
-              corepack pnpm exec tauri build --no-bundle
+              # Use the pnpm from nixpkgs. `corepack enable` would try to
+              # symlink into the read-only store, and `corepack pnpm` would
+              # try to download pnpm and fail inside the Nix sandbox.
+              export npm_config_store_dir="$TMPDIR/.pnpm-store"
+              export npm_config_manage_package_manager_versions=false
+              pnpm install --frozen-lockfile
+              pnpm exec expo export --platform web
+              pnpm exec tauri build --no-bundle
               runHook postBuild
             '';
 

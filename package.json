@@ -13,7 +13,8 @@
     "tauri:cli": "pnpm exec tauri",
     "tauri:build": "pnpm exec tauri build",
     "tauri:build:appimage": "APPIMAGE_EXTRACT_AND_RUN=1 pnpm exec tauri build --bundles appimage",
-    "build:nix": "nix --extra-experimental-features 'nix-command flakes' build .#uec --option sandbox false"
+    "build:nix": "nix --extra-experimental-features 'nix-command flakes' build .#uec --option sandbox false",
+    "run:nix": "nix --extra-experimental-features 'nix-command flakes' run . --option sandbox false"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
