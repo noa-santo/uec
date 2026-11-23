@@ -7,6 +7,7 @@ import { ResponseType } from "expo-auth-session";
 import * as Google from "expo-auth-session/providers/google";
 import { addAccount, getAccounts, googleOAuthConfig, makeId, MailAccount, ManualAccount, verifyGmailAccessToken, removeAccount } from "@/lib/accounts";
 import { notifySettingsChanged } from "@/lib/settings_events";
+import { loadGoogleClientSecret, saveGoogleClientSecret } from "@/lib/google_auth";
 
 // maybeCompleteAuthSession is now called in _layout.tsx at root level.
 // Calling it here too (as a no-op on non-popup pages) is harmless but redundant.
@@ -65,12 +66,13 @@ export default function AccountsScreen() {
   const [inUser, setInUser] = useState("");
   const [inPass, setInPass] = useState("");
 
+  const [clientSecret, setClientSecret] = useState("");
   const oauthConfig = googleOAuthConfig();
   const [request, response, promptAsync] = Google.useAuthRequest({
     iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
-    clientSecret: oauthConfig.clientSecret,
+    clientSecret: oauthConfig.clientSecret || clientSecret.trim() || undefined,
     responseType: ResponseType.Code,
     extraParams: { access_type: "offline", prompt: "consent" },
     scopes: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"],
@@ -83,6 +85,7 @@ export default function AccountsScreen() {
 
   useEffect(() => {
     getAccounts().then(setAccounts);
+    loadGoogleClientSecret().then(setClientSecret);
   }, []);
 
   useEffect(() => {
@@ -91,7 +94,7 @@ export default function AccountsScreen() {
       if (response.type === "error") {
         const detail = response.error?.message || response.params?.error_description || response.params?.error || "unknown error";
         const hint = /client_secret|invalid_client/i.test(detail)
-          ? " Use a Google Desktop app client ID (PKCE, no secret), or set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET for a Web client."
+          ? " Paste your Web client secret below and try again, or use a Google Desktop app client ID (PKCE, no secret)."
           : "";
         Alert.alert("Gmail sign-in failed", `${detail}.${hint}`);
       }
@@ -182,8 +185,32 @@ export default function AccountsScreen() {
         </Pressable>
         {!gmailConfigured && <T style={{ color: "#f0ad4e", alignSelf: "center" }}>Set Google client IDs in .env to enable Gmail.</T>}
         <T style={{ flexBasis: "100%", color: "#888", fontSize: 12 }}>
-          For Tauri/web use a Google “Desktop app” OAuth client ID with PKCE (no secret), or set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET for a Web client. Offline access keeps sessions valid after the first hour.
+          For Tauri/web use a Google “Desktop app” OAuth client ID with PKCE (no secret). A Web application client needs the secret entered below. Offline access keeps sessions valid after the first hour.
         </T>
+        {oauthConfig.platform === "web" && process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID && !oauthConfig.clientSecret && !clientSecret.trim() && (
+          <T style={{ flexBasis: "100%", color: "#f0ad4e", fontSize: 12 }}>
+            A Web client ID is configured but no client secret is set — sign-in will fail until you enter it below.
+          </T>
+        )}
+
+        <View style={{ flexBasis: "100%", marginTop: 4 }}>
+          <LabeledInput
+            label="Google Web client secret (only for Web application clients)"
+            value={clientSecret}
+            onChangeText={setClientSecret}
+            placeholder="Paste client secret, or leave empty for Desktop app clients"
+            secureTextEntry
+          />
+          <Pressable
+            onPress={async () => {
+              await saveGoogleClientSecret(clientSecret);
+              Alert.alert("Saved", clientSecret.trim() ? "Google client secret stored on this device." : "Google client secret removed.");
+            }}
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: "#333", borderRadius: 6, alignSelf: "flex-start" }}
+          >
+            <T style={{ fontSize: 12 }}>Save client secret</T>
+          </Pressable>
+        </View>
 
         <Pressable
           onPress={() => setShowManual((s) => !s)}

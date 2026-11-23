@@ -1,5 +1,6 @@
 import {Platform} from "react-native";
 import { getItem, setItem } from "./storage";
+import { loadGoogleClientSecret } from "./google_auth";
 
 export type Protocol = "imap" | "pop3";
 
@@ -95,7 +96,8 @@ async function refreshGmailAccount(account: GmailAccount): Promise<GmailAccount>
   if (!account.refreshToken) {
     throw new Error("Gmail session expired and no refresh token was stored. Reconnect the account with offline access.");
   }
-  const { clientId, clientSecret } = googleOAuthConfig();
+  const { clientId, clientSecret: envSecret } = googleOAuthConfig();
+  const clientSecret = envSecret || await loadGoogleClientSecret();
   if (!clientId) throw new Error("Google OAuth client ID is not configured for this platform.");
   const body: Record<string, string> = {
     client_id: clientId,

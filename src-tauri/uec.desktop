@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=UEC
+GenericName=Ultimate Email Client
+Comment=Virtual inboxes and alias routing
+Exec=uec %U
+Icon=uec
+Terminal=false
+Categories=Network;Email;
+StartupNotify=true

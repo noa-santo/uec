@@ -37,6 +37,22 @@ test("expired sessions without a refresh token fail with an actionable message",
   );
 });
 
+test("refresh uses a client secret entered at runtime", async () => {
+  delete process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET;
+  const { saveGoogleClientSecret } = await import("./google_auth");
+  await saveGoogleClientSecret("runtime-secret");
+  let body = "";
+  (globalThis as any).fetch = async (_url: string, init: any) => {
+    body = init.body;
+    return { ok: true, status: 200, json: async () => ({ access_token: "refreshed", expires_in: 1800 }) };
+  };
+  const { setItem } = await import("./storage");
+  await setItem("uec.accounts", JSON.stringify([expiredAccount()]));
+  await getValidGmailAccount(expiredAccount());
+  assert.equal(new URLSearchParams(body).get("client_secret"), "runtime-secret");
+  await saveGoogleClientSecret("");
+});
+
 test.after(() => {
   (globalThis as any).fetch = originalFetch;
   if (originalClientId === undefined) delete process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;

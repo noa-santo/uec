@@ -32,7 +32,7 @@ The app uses file‑based routing (expo-router). Main screens:
 
 ## Accounts: Gmail & Manual IMAP/POP
 
-- **Gmail**: Syncs emails via the Gmail REST API using OAuth2 client IDs configured in `.env`. The sign-in requests offline access so a refresh token is stored; expired access tokens are renewed automatically. If Google returns `client_secret is missing`, use a **Desktop app** OAuth client ID (PKCE, no secret) for Tauri/web, or set `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET` for a Web application client. The Accounts screen has a **Reconnect** button for sessions whose refresh token was lost.
+- **Gmail**: Syncs emails via the Gmail REST API using OAuth2 client IDs configured in `.env`. The sign-in requests offline access so a refresh token is stored; expired access tokens are renewed automatically. If Google returns `client_secret is missing`, use a **Desktop app** OAuth client ID (PKCE, no secret) for Tauri/web. If you must use a Web application client, paste its client secret into the **Google Web client secret** field on the Accounts screen (stored on the device and used for both sign-in and token refresh); `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET` is also supported as a fallback. The Accounts screen has a **Reconnect** button for sessions whose refresh token was lost.
 - **Manual (IMAP/POP)**: Stores credentials securely in `expo-secure-store` / `AsyncStorage`. Note: Direct TCP/TLS sockets for IMAP/POP cannot be opened in browser/React Native sandboxes without a backend daemon or native socket layer. The UI clearly displays configured manual accounts.
 
 ## Virtual Inbox Routing & Pattern Matching
@@ -70,9 +70,10 @@ The inbox view reloads rules/folders whenever it regains focus or a settings sav
 - `pnpm run web` — start the web target directly
 - `pnpm run android` — start the Android target directly
 - `pnpm run tauri:cli dev` — start the native Linux desktop shell
-- `pnpm run tauri:cli build` — build the native Linux `.deb` installer
-- `pnpm run tauri:build:appimage` — additionally build an AppImage without requiring FUSE
+- `pnpm run build:nix` — build the NixOS package (wrapped binary, desktop entry and icon)
 
 ### NixOS/Linux native build
 
-The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. The CI workflow in `.github/workflows/build-tauri.yml` declares the dependencies in its Nix shell and runs `pnpm exec tauri build` from the repository root; on NixOS, use `nix develop` or the same shell, then `corepack pnpm install --frozen-lockfile && corepack pnpm exec tauri build`. A `.deb` package is produced by default. `pnpm run tauri:build:appimage` also builds an AppImage using `APPIMAGE_EXTRACT_AND_RUN=1` so it works on systems without kernel FUSE.
+The default build target is NixOS, not Debian. `nix build .#uec` (or `pnpm run build:nix`) produces a wrapped application in `result/` with its GTK/WebKit libraries, a desktop entry and an icon; `nix run .` starts it. The build uses `tauri build --no-bundle` so no `.deb`/AppImage packaging is involved. npm and cargo dependencies are fetched during the build, so on a default multi-user NixOS setup use `--option sandbox false` (included in the script) or mark the builder as a trusted user.
+
+The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. CI builds the same Nix package and uploads it as an artifact. For a quick non-Nix Linux build, `pnpm run tauri:cli build` still creates a `.deb`, and `pnpm run tauri:build:appimage` creates an AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
