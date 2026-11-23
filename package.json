@@ -3,6 +3,7 @@
   "description": "Ultimate EMail Client",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "license": "MIT",
   "scripts": {
     "start": "EXPO_TUNNEL_SUBDOMAIN=uecdev expo start --tunnel",
     "android": "expo start --android",
@@ -60,5 +61,5 @@
     "typescript": "~6.0.3"
   },
   "private": true,
-  "packageManager": "pnpm@12.3.4"
+  "packageManager": "pnpm@12.9.0"
 }

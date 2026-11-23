@@ -80,7 +80,7 @@
             meta = with pkgs.lib; {
               description = "UEC — Ultimate Email Client";
               homepage = "https://github.com/noa-santo/uec";
-              license = licenses.unfree;
+              license = licenses.mit;
               mainProgram = "uec";
               platforms = platforms.linux;
             };
