@@ -41,6 +41,14 @@
 .uec-tester-bar button:hover { background: #475569; }
 .uec-test-match { color: #38bdf8; }
 
+/* ── unrouted address quick actions ──────────────────────────────────────── */
+.uec-unresolved { padding: 10px 16px; border-bottom: 1px solid #1e293b; background: #101827; }
+.uec-unresolved > strong { display: block; margin-bottom: 8px; color: #fbbf24; }
+.uec-unresolved > strong span { color: #94a3b8; font-weight: 400; }
+.uec-unresolved-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 92px; overflow: auto; }
+.uec-unresolved-list button { background: #172554; border: 1px solid #1d4ed8; }
+.uec-unresolved-list button small { margin-left: 6px; color: #bfdbfe; }
+
 /* ── inline editor panel ─────────────────────────────────────────────────── */
 .uec-inline-editor {
   display: flex;
@@ -141,6 +149,9 @@
 .uec-node:active { cursor: grabbing; }
 .uec-node-disabled { opacity: 0.45; border-style: dashed; }
 .uec-node-inbox   { background: #064e3b; border-color: #10b981; }
+.uec-node-folder { background: #181818; border-color: #a3a3a3; min-width: 190px; }
+.uec-node-logic { background: #272014; border-color: #f59e0b; min-width: 150px; }
+.uec-node-logic .uec-badge { background: #a16207; }
 .uec-node-pattern { border-color: #38bdf8; }
 
 .uec-node-label {
@@ -216,4 +227,36 @@
 .react-flow__minimap-node,
 .react-flow .nodrag {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+}
+
+/* Responsive dark editor controls aligned with the app's monochrome surfaces. */
+.uec-editor { background: #000; color: #f5f5f5; }
+.uec-editor-toolbar, .uec-tester-bar { background: #080808; border-color: #242424; }
+.uec-editor-toolbar { position: relative; }
+.uec-editor-toolbar > strong { color: #f5f5f5; font-size: 15px; letter-spacing: .02em; }
+.uec-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.uec-editor .uec-btn-secondary { background: #171717; border: 1px solid #383838; }
+.uec-editor .uec-btn-secondary:hover { background: #272727; }
+.uec-editor button:disabled { cursor: not-allowed; opacity: .5; }
+.uec-editor-toolbar > span:not(.uec-status) { max-width: 560px; line-height: 1.45; }
+.uec-inline-editor, .uec-unresolved { background: #0b0b0b; border-color: #242424; }
+.uec-editor-canvas { background: #050505; min-height: 340px; }
+.uec-route-row { background: #090909; border-color: #242424; }
+.uec-editor button { transition: background-color .15s ease, border-color .15s ease, opacity .15s ease; }
+.uec-editor button:focus-visible, .uec-editor input:focus-visible, .uec-editor select:focus-visible { outline: 2px solid #ddd; outline-offset: 2px; }
+.uec-unresolved-list button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 680px) {
+  .uec-editor { min-height: 0; height: auto; }
+  .uec-editor-toolbar { align-items: stretch; padding: 12px; gap: 8px; }
+  .uec-editor-toolbar > span:not(.uec-status) { flex-basis: 100%; max-width: none; }
+  .uec-editor-toolbar > div { margin-left: 0 !important; width: 100%; }
+  .uec-editor-toolbar > div button { flex: 1; }
+  .uec-tester-bar { padding: 10px 12px; }
+  .uec-tester-bar input { min-width: 0; flex-basis: 100%; max-width: none; }
+  .uec-inline-editor { align-items: stretch; padding: 12px; }
+  .uec-inline-editor label { flex: 1 1 100%; }
+  .uec-inline-editor label input, .uec-inline-editor label select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .uec-editor-canvas { min-height: 54vh; }
+  .uec-route-list { max-height: 28vh; padding: 8px 12px; }
+  .uec-route-details { min-width: 0; }
 }

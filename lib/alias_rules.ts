@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-export type MatchType = "exact" | "contains" | "domain" | "prefix" | "regex";
+export type MatchType = "exact" | "contains" | "domain" | "prefix" | "regex" | "all";
 
 export type AliasRule = {
   id: string;
@@ -10,6 +10,10 @@ export type AliasRule = {
   matchType?: MatchType;
   inbox: string;
   enabled: boolean;
+  conditions?: Array<{ alias: string; matchType: MatchType; field?: "recipient" | "sender" | "subject" | "body" }>;
+  logic?: "and" | "or";
+  outputMode?: "static" | "subject" | "sender" | "senderDomain";
+  field?: "recipient" | "sender" | "subject" | "body";
 };
 
 const KEY = "uec.aliasRules.v1";
@@ -24,8 +28,9 @@ export function validateRule(rule: Pick<AliasRule, "alias" | "inbox" | "matchTyp
   const inbox = rule.inbox.trim();
   const matchType = rule.matchType || "exact";
 
-  if (!alias || !inbox) return "Pattern and virtual inbox are required.";
+  if (!inbox || (matchType !== "all" && !alias)) return "Pattern and virtual inbox are required.";
 
+  if (matchType === "all") return undefined;
   if (matchType === "exact") {
     const normalized = normalizeAddress(alias);
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return "Enter a valid email address for exact match.";
@@ -42,13 +47,21 @@ export function validateRule(rule: Pick<AliasRule, "alias" | "inbox" | "matchTyp
   return undefined;
 }
 
-export function testRuleMatch(address: string, rule: AliasRule): boolean {
+export function testRuleMatch(address: string, rule: AliasRule, email?: { from?: string; subject?: string; body?: string; to?: string }): boolean {
   if (!rule.enabled) return false;
+  const valueFor = (field: AliasRule["field"] = "recipient") => field === "sender" ? (email?.from?.match(/<([^>]+)>/)?.[1] || email?.from || "") : field === "subject" ? (email?.subject || "") : field === "body" ? (email?.body || "") : (email?.to || address);
+  if (rule.conditions?.length) {
+    const outcomes = rule.conditions.map((condition) => testRuleMatch(valueFor(condition.field), { ...rule, alias: condition.alias, matchType: condition.matchType, conditions: undefined, field: undefined }, undefined));
+    return rule.logic === "or" ? outcomes.some(Boolean) : outcomes.every(Boolean);
+  }
+  address = valueFor(rule.field);
   const target = normalizeAddress(address);
   const matchType = rule.matchType || "exact";
   const pattern = rule.alias.trim().toLowerCase();
 
   switch (matchType) {
+    case "all":
+      return true;
     case "exact":
       return target === normalizeAddress(rule.alias);
     case "contains":
@@ -80,7 +93,7 @@ function normalizeRules(value: unknown): AliasRule[] {
   const seen = new Set<string>();
   return value.flatMap((item: any) => {
     if (!item || typeof item.id !== "string" || typeof item.alias !== "string" || typeof item.inbox !== "string") return [];
-    const matchType: MatchType = ["exact", "contains", "domain", "prefix", "regex"].includes(item.matchType)
+    const matchType: MatchType = ["exact", "contains", "domain", "prefix", "regex", "all"].includes(item.matchType)
       ? item.matchType
       : "exact";
     const rule: AliasRule = {
@@ -89,9 +102,17 @@ function normalizeRules(value: unknown): AliasRule[] {
       matchType,
       inbox: item.inbox.trim(),
       enabled: item.enabled !== false,
+      conditions: Array.isArray(item.conditions) ? item.conditions.filter((condition: any) => condition && typeof condition.alias === "string" && ["exact", "contains", "domain", "prefix", "regex"].includes(condition.matchType)).map((condition: any) => ({ alias: condition.alias.trim(), matchType: condition.matchType as MatchType, field: ["recipient", "sender", "subject", "body"].includes(condition.field) ? condition.field : "recipient" })) : undefined,
+      logic: item.logic === "or" ? "or" : item.logic === "and" ? "and" : undefined,
+      outputMode: ["static", "subject", "sender", "senderDomain"].includes(item.outputMode) ? item.outputMode : "static",
+      field: ["recipient", "sender", "subject", "body"].includes(item.field) ? item.field : "recipient",
     };
-    const key = `${rule.matchType}:${rule.alias.toLowerCase()}`;
-    if (validateRule(rule) || seen.has(key)) return [];
+    const key = `${rule.matchType}:${rule.alias.toLowerCase()}:${rule.inbox.toLowerCase()}:${JSON.stringify(rule.conditions || [])}`;
+    const invalidCondition = rule.conditions?.some((condition) => {
+      if ((condition.field === "subject" || condition.field === "body") && condition.matchType === "exact") return !condition.alias;
+      return Boolean(validateRule({ alias: condition.alias, inbox: rule.inbox, matchType: condition.matchType }));
+    });
+    if ((rule.conditions?.length ? invalidCondition : validateRule(rule)) || seen.has(key)) return [];
     seen.add(key);
     return [rule];
   });
@@ -120,12 +141,11 @@ export async function saveAliasRules(rules: AliasRule[]): Promise<void> {
   await write(JSON.stringify(normalizeRules(rules)));
 }
 
-export function resolveInbox(address: string, rules: AliasRule[]): string {
+export function resolveInbox(address: string, rules: AliasRule[], email?: { from?: string; subject?: string; body?: string; to?: string }): string {
   const normalized = normalizeAddress(address);
-  for (const rule of rules) {
-    if (testRuleMatch(normalized, rule)) {
-      return rule.inbox;
-    }
+  const orderedRules = [...rules.filter((rule) => (rule.matchType || "exact") !== "all"), ...rules.filter((rule) => (rule.matchType || "exact") === "all")];
+  for (const rule of orderedRules) {
+    if (testRuleMatch(normalized, rule, email)) return rule.inbox;
   }
   return normalized;
 }

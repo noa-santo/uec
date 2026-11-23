@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from "react";
-import { Animated, Easing, ViewStyle } from "react-native";
+import { Animated, Easing, Platform, ViewStyle } from "react-native";
+
+const useNativeDriver = Platform.OS !== "web";
 
 export type AnimationProps = {
   children: React.ReactNode;
@@ -15,8 +17,8 @@ export function FadeSlideIn({ children, delay = 0, duration = 400, style }: Anim
   useEffect(() => {
     const t = setTimeout(() => {
       Animated.parallel([
-        Animated.timing(opacity, { toValue: 1, duration, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(translateY, { toValue: 0, duration, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration, easing: Easing.out(Easing.cubic), useNativeDriver }),
+        Animated.timing(translateY, { toValue: 0, duration, easing: Easing.out(Easing.cubic), useNativeDriver }),
       ]).start();
     }, delay);
     return () => clearTimeout(t);
@@ -36,8 +38,8 @@ export function ScaleIn({ children, delay = 0, duration = 350, style }: Animatio
   useEffect(() => {
     const t = setTimeout(() => {
       Animated.parallel([
-        Animated.timing(opacity, { toValue: 1, duration, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 7, tension: 80 }),
+        Animated.timing(opacity, { toValue: 1, duration, easing: Easing.out(Easing.cubic), useNativeDriver }),
+        Animated.spring(scale, { toValue: 1, useNativeDriver, friction: 7, tension: 80 }),
       ]).start();
     }, delay);
     return () => clearTimeout(t);
