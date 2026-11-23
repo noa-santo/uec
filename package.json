@@ -10,7 +10,9 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "node scripts/run-tests.cjs",
-    "tauri:cli": "pnpm exec tauri"
+    "tauri:cli": "pnpm exec tauri",
+    "tauri:build": "pnpm exec tauri build",
+    "tauri:build:appimage": "APPIMAGE_EXTRACT_AND_RUN=1 pnpm exec tauri build --bundles appimage"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

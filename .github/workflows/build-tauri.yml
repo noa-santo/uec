@@ -30,6 +30,7 @@ jobs:
         env:
           NIX_PATH: ${{ env.NIX_PATH }}
           NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
           cat > shell.nix <<'EOF'
           let

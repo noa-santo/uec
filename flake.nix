@@ -9,7 +9,8 @@
         in { default = pkgs.mkShell {
           packages = with pkgs; [ nodejs_22 pnpm rustc cargo pkg-config gobject-introspection cargo-tauri patchelf fuse ];
           buildInputs = with pkgs; [ at-spi2-atk atkmm cairo gdk-pixbuf glib gtk3 harfbuzz librsvg libsoup_3 pango webkitgtk_4_1 openssl ];
-          shellHook = ''export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPath "lib/pkgconfig" (with pkgs; [ gtk3 webkitgtk_4_1 openssl ])}:$PKG_CONFIG_PATH"'';
+          shellHook = ''export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPath "lib/pkgconfig" (with pkgs; [ gtk3 webkitgtk_4_1 openssl ])}:$PKG_CONFIG_PATH"
+            export APPIMAGE_EXTRACT_AND_RUN=1'';
         }; });
       packages = nixpkgs.lib.genAttrs systems (system:
         let pkgs = import nixpkgs { inherit system; };

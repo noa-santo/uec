@@ -70,8 +70,9 @@ The inbox view reloads rules/folders whenever it regains focus or a settings sav
 - `pnpm run web` — start the web target directly
 - `pnpm run android` — start the Android target directly
 - `pnpm run tauri:cli dev` — start the native Linux desktop shell
-- `pnpm run tauri:cli build` — build native Linux installers
+- `pnpm run tauri:cli build` — build the native Linux `.deb` installer
+- `pnpm run tauri:build:appimage` — additionally build an AppImage without requiring FUSE
 
 ### NixOS/Linux native build
 
-The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. The CI workflow in `.github/workflows/build-tauri.yml` declares the dependencies in its Nix shell and runs `pnpm exec tauri build` from the repository root; on NixOS, use `nix develop` or the same shell, then `corepack pnpm install --frozen-lockfile && corepack pnpm exec tauri build`. Debian packages and AppImages are produced.
+The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. The CI workflow in `.github/workflows/build-tauri.yml` declares the dependencies in its Nix shell and runs `pnpm exec tauri build` from the repository root; on NixOS, use `nix develop` or the same shell, then `corepack pnpm install --frozen-lockfile && corepack pnpm exec tauri build`. A `.deb` package is produced by default. `pnpm run tauri:build:appimage` also builds an AppImage using `APPIMAGE_EXTRACT_AND_RUN=1` so it works on systems without kernel FUSE.
