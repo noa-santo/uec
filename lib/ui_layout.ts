@@ -6,6 +6,10 @@ export type InboxLayout = {
   collapsedInboxes: boolean;
   collapsedMessages: boolean;
   collapsedMessage: boolean;
+  /** Where folder rows sit relative to ordinary inboxes in the unpinned list. */
+  folderPlacement: "top" | "bottom";
+  /** Pinned items as `folder:<id>` / `inbox:<address>` keys, in user order. */
+  pinnedItems: string[];
 };
 
 export const DEFAULT_INBOX_LAYOUT: InboxLayout = {
@@ -14,7 +18,12 @@ export const DEFAULT_INBOX_LAYOUT: InboxLayout = {
   collapsedInboxes: false,
   collapsedMessages: false,
   collapsedMessage: false,
+  folderPlacement: "top",
+  pinnedItems: [],
 };
+
+export const folderPinKey = (id: string) => `folder:${id}`;
+export const inboxPinKey = (address: string) => `inbox:${address.trim().toLowerCase()}`;
 
 const KEY = "uec.inboxLayout.v1";
 const clampWidth = (value: unknown, fallback: number) =>
@@ -31,6 +40,10 @@ export async function loadInboxLayout(): Promise<InboxLayout> {
       collapsedInboxes: Boolean(parsed.collapsedInboxes),
       collapsedMessages: Boolean(parsed.collapsedMessages),
       collapsedMessage: Boolean(parsed.collapsedMessage),
+      folderPlacement: parsed.folderPlacement === "bottom" ? "bottom" : "top",
+      pinnedItems: Array.isArray(parsed.pinnedItems)
+        ? parsed.pinnedItems.filter((value: unknown) => typeof value === "string")
+        : [],
     };
   } catch {
     return DEFAULT_INBOX_LAYOUT;

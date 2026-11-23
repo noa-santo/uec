@@ -31,6 +31,7 @@ import {
 import { collectUnresolvedAddresses, saveUnresolvedAddresses } from "@/lib/email_utils";
 import { InboxFolder, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
 import { notifySettingsChanged } from "@/lib/settings_events";
+import { loadNodeGraph, saveNodeGraph } from "@/lib/node_graph";
 import "./node-editor.css";
 
 // ── tiny uid ────────────────────────────────────────────────────────────────
@@ -240,10 +241,12 @@ function connectionError(sourceKind: NodeData["kind"], targetKind: NodeData["kin
   return "Folders are the end of a chain. Start the connection from a condition or an inbox.";
 }
 
-function graphToFolders(nodes: Node<NodeData>[], edges: Edge[]): InboxFolder[] {
+function graphToFolders(nodes: Node<NodeData>[], edges: Edge[], existing: InboxFolder[] = []): InboxFolder[] {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return nodes.filter((node) => node.data.kind === "folder").map((folderNode) => {
     const folder = folderNode.data as FolderData;
+    const id = folderNode.id.replace(/^f_/, "");
+    const previous = existing.find((item) => item.id === id);
     const inboxes = new Set<string>();
     for (const edge of edges) {
       if (edge.target !== folderNode.id) continue;
@@ -251,11 +254,11 @@ function graphToFolders(nodes: Node<NodeData>[], edges: Edge[]): InboxFolder[] {
       if (source?.data.kind === "inbox" && source.data.name.trim()) inboxes.add(source.data.name.trim());
     }
     return {
-      id: folderNode.id.replace(/^f_/, ""),
+      id,
       name: folder.name,
       inboxes: [...inboxes],
-      collapsed: Boolean(folder.collapsed),
-      includeCatchAll: Boolean(folder.includeCatchAll),
+      collapsed: Boolean(folder.collapsed || previous?.collapsed),
+      includeCatchAll: Boolean(folder.includeCatchAll || previous?.includeCatchAll),
     };
   });
 }
@@ -273,6 +276,7 @@ function NodeEditorInner() {
   const nodesRef = useRef(nodes); nodesRef.current = nodes;
   const edgesRef = useRef(edges); edgesRef.current = edges;
   const rulesRef = useRef(rules); rulesRef.current = rules;
+  const foldersRef = useRef(folders); foldersRef.current = folders;
 
   const historyRef = useRef<Array<{ nodes: Node<NodeData>[]; edges: Edge[] }>>([]);
   const redoRef = useRef<Array<{ nodes: Node<NodeData>[]; edges: Edge[] }>>([]);
@@ -328,13 +332,15 @@ function NodeEditorInner() {
 
   // ── load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    Promise.all([loadAliasRules(), loadInboxFolders()]).then(([saved, savedFolders]) => {
+    Promise.all([loadAliasRules(), loadInboxFolders(), loadNodeGraph()]).then(([saved, savedFolders, savedGraph]) => {
       setRules(saved);
       rulesRef.current = saved;
       setFolders(savedFolders);
-      const { nodes: n, edges: e } = rulesToGraph(saved, savedFolders);
-      setNodes(n);
-      setEdges(e);
+      foldersRef.current = savedFolders;
+      // Prefer the saved graph so draft/unconnected nodes survive a reload.
+      const graph = savedGraph && savedGraph.nodes.length ? savedGraph : rulesToGraph(saved, savedFolders);
+      setNodes(graph.nodes as Node<NodeData>[]);
+      setEdges(graph.edges as Edge[]);
       setLoaded(true);
       void refreshSuggestions();
     });
@@ -347,16 +353,21 @@ function NodeEditorInner() {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         const derived = graphToRules(nextNodes, nextEdges);
-        const derivedFolders = graphToFolders(nextNodes, nextEdges);
-        const [ruleResult, folderResult] = await Promise.all([saveAliasRules(derived), saveInboxFolders(derivedFolders)]);
+        const derivedFolders = graphToFolders(nextNodes, nextEdges, foldersRef.current);
+        const [ruleResult, folderResult, graphResult] = await Promise.all([
+          saveAliasRules(derived),
+          saveInboxFolders(derivedFolders),
+          saveNodeGraph(nextNodes, nextEdges),
+        ]);
         setRules(derived);
         rulesRef.current = derived;
         setFolders(derivedFolders);
-        const ok = ruleResult.ok && folderResult.ok;
+        foldersRef.current = derivedFolders;
+        const ok = ruleResult.ok && folderResult.ok && graphResult.ok;
         if (ok) notifySettingsChanged();
         flash(ok
-          ? `Saved ${derived.length} route(s) and ${derivedFolders.length} folder(s).`
-          : `Could not save (${ruleResult.error || folderResult.error || "storage error"}). Changes are only in memory.`);
+          ? `Saved ${derived.length} route(s), ${derivedFolders.length} folder(s) and the graph layout.`
+          : `Could not save (${ruleResult.error || folderResult.error || graphResult.error || "storage error"}). Changes are only in memory.`);
       }, 400);
     },
     []
@@ -735,7 +746,7 @@ function NodeEditorInner() {
               onNodesDelete={onNodesDelete}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeClick={onNodeClick}
-              deleteKeyCode={["Delete", "Backspace"]}
+              deleteKeyCode={editingId ? null : ["Delete", "Backspace"]}
               fitView
               fitViewOptions={{ padding: 0.2 }}
               proOptions={{ hideAttribution: true }}

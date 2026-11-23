@@ -58,7 +58,8 @@
               export HOME="$TMPDIR"
               export XDG_CACHE_HOME="$TMPDIR/.cache"
               export CARGO_HOME="$TMPDIR/.cargo"
-              corepack enable
+              # Do NOT run `corepack enable`: it tries to symlink into the
+              # read-only Nix store. `corepack pnpm` works without it.
               corepack pnpm config set store-dir "$TMPDIR/.pnpm-store"
               corepack pnpm install --frozen-lockfile
               corepack pnpm exec expo export --platform web

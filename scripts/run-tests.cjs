@@ -46,3 +46,5 @@ requireTs('lib/inbox_folders.test.ts');
 requireTs('lib/storage.test.ts');
 requireTs('lib/settings_events.test.ts');
 requireTs('lib/accounts.test.ts');
+requireTs('lib/node_graph.test.ts');
+requireTs('lib/ui_layout.test.ts');

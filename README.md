@@ -48,7 +48,7 @@ An interactive test resolver is built directly into the node editor so you can v
 
 ### Node editor
 
-The web node editor has a node-type sidebar with tabs (Conditions, Logic, Inboxes). Clicking a type creates that node in the centre of the current view and opens its configuration dialog. Double-click a node to edit it again. To connect, drag from an **out** handle to an **in** handle, or click a node and then click a highlighted compatible target; the sidebar has a connection guide and incompatible links explain why they cannot be made. Configuration changes are saved automatically.
+The web node editor has a node-type sidebar with tabs (Conditions, Logic, Inboxes). Clicking a type creates that node in the centre of the current view and opens its configuration dialog. Double-click a node to edit it again. To connect, drag from an **out** handle to an **in** handle, or click a node and then click a highlighted compatible target; the sidebar has a connection guide and incompatible links explain why they cannot be made. Configuration changes are saved automatically. The full graph (including draft/unconnected nodes and node positions) is persisted separately from the derived routing rules, so nodes no longer disappear after a reload.
 
 Folder nodes are purely configuration: they group virtual inboxes in the main view but never hide nodes or edges in the graph. Enable **Include catch-all / unsorted inboxes** on a folder to collect every virtual inbox created by a catch-all rule — including dynamic names derived from sender, subject or sender domain. Folders that already contain the catch-all rule's inbox name (for example, "Other") collect those inboxes automatically. Those folders show the real inbox and message counts and can be opened to read all their messages together.
 
@@ -56,7 +56,7 @@ Resolver suggestions include every message in the local mail cache, not only the
 
 ### Main view
 
-Virtual inboxes and folders can be searched and sorted by name, message count, or newest message. Column dividers can be dragged to resize columns (web), and each column can be collapsed with its header button; the layout is remembered between sessions.
+Virtual inboxes and folders can be searched and sorted by name, message count, or newest message. Use the star button to pin any folder or inbox, and the ↑/↓ buttons to reorder pinned items; pinned items always appear above the rest. The **Folders: above/below** toggle decides where folders sit relative to ordinary inboxes. Column dividers can be dragged to resize columns (web), and each column can be collapsed with its header button; the layout is remembered between sessions.
 
 ### Storage
 
@@ -74,6 +74,6 @@ The inbox view reloads rules/folders whenever it regains focus or a settings sav
 
 ### NixOS/Linux native build
 
-The default build target is NixOS, not Debian. `nix build .#uec` (or `pnpm run build:nix`) produces a wrapped application in `result/` with its GTK/WebKit libraries, a desktop entry and an icon; `nix run .` starts it. The build uses `tauri build --no-bundle` so no `.deb`/AppImage packaging is involved. npm and cargo dependencies are fetched during the build, so on a default multi-user NixOS setup use `--option sandbox false` (included in the script) or mark the builder as a trusted user.
+The default build target is NixOS, not Debian. `nix build .#uec` (or `pnpm run build:nix`) produces a wrapped application in `result/` with its GTK/WebKit libraries, a desktop entry and an icon; `nix run .` starts it. The build uses `tauri build --no-bundle` so no `.deb`/AppImage packaging is involved. npm and cargo dependencies are fetched during the build, so on a default multi-user NixOS setup use `--option sandbox false` (included in the script) or mark the builder as a trusted user. The build uses `corepack pnpm` directly — it deliberately does not run `corepack enable`, which would try to write into the read-only Nix store.
 
 The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. CI builds the same Nix package and uploads it as an artifact. For a quick non-Nix Linux build, `pnpm run tauri:cli build` still creates a `.deb`, and `pnpm run tauri:build:appimage` creates an AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.

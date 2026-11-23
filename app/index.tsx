@@ -6,13 +6,16 @@ import { getAccounts, GmailAccount, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts, fetchOlderGmailEmails } from "@/lib/gmail";
 import { loadAliasRules } from "@/lib/alias_rules";
 import { InboxFolder, folderInboxNames, folderMessages, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
-import { DEFAULT_INBOX_LAYOUT, InboxLayout, loadInboxLayout, saveInboxLayout } from "@/lib/ui_layout";
+import { DEFAULT_INBOX_LAYOUT, folderPinKey, inboxPinKey, InboxLayout, loadInboxLayout, saveInboxLayout } from "@/lib/ui_layout";
 import { subscribeToSettings } from "@/lib/settings_events";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
 
 type InboxSort = "name" | "count" | "newest";
+type NavItem =
+  | { type: "folder"; id: string; name: string; inboxes: string[]; count: number; pinned: boolean; key: string }
+  | { type: "inbox"; address: string; folderId?: string; pinned: boolean; key: string };
 
 function Heading(props: any) {
   return (
@@ -174,26 +177,42 @@ export default function Index() {
     });
   }, [groups, inboxSort, inboxSortDesc]);
 
-  const navItems = useMemo(() => {
+  const navItems = useMemo<NavItem[]>(() => {
     const term = inboxSearch.trim().toLowerCase();
     const matches = (name: string) => !term || name.toLowerCase().includes(term);
+    const pinnedIndex = new Map(layout.pinnedItems.map((key, index) => [key, index]));
+    const folderRows: NavItem[] = [];
+    const inboxRows: NavItem[] = [];
+    const pinnedRows: NavItem[] = [];
     const assigned = new Set<string>();
-    const items: Array<{ type: "folder"; id: string; name: string; inboxes: string[]; count: number } | { type: "inbox"; address: string; folderId?: string }> = [];
 
     for (const { folder, inboxes, messages } of folderMap.values()) {
       inboxes.forEach((name) => assigned.add(name.toLowerCase()));
+      const key = folderPinKey(folder.id);
+      const pinned = pinnedIndex.has(key);
       const children = addresses.filter((address) => inboxes.some((name) => name.toLowerCase() === address.toLowerCase()) && matches(address));
-      if (!matches(folder.name) && children.length === 0) continue;
-      items.push({ type: "folder", id: folder.id, name: folder.name, inboxes, count: messages.length });
+      if (!matches(folder.name) && children.length === 0 && !pinned) continue;
+      const row: NavItem = { type: "folder", id: folder.id, name: folder.name, inboxes, count: messages.length, pinned, key };
+      if (pinned) pinnedRows.push(row); else folderRows.push(row);
       if (!collapsedFolders.includes(folder.id)) {
-        for (const address of children) items.push({ type: "inbox", address, folderId: folder.id });
+        for (const address of children) {
+          const inboxKey = inboxPinKey(address);
+          if (pinnedIndex.has(inboxKey)) continue; // shown once, in the pinned section
+          inboxRows.push({ type: "inbox", address, folderId: folder.id, pinned: false, key: inboxKey });
+        }
       }
     }
     for (const address of addresses) {
-      if (!assigned.has(address.toLowerCase()) && matches(address)) items.push({ type: "inbox", address });
+      const key = inboxPinKey(address);
+      const pinned = pinnedIndex.has(key);
+      if (!pinned && (assigned.has(address.toLowerCase()) || !matches(address))) continue;
+      const row: NavItem = { type: "inbox", address, pinned, key };
+      if (pinned) pinnedRows.push(row); else inboxRows.push(row);
     }
-    return items;
-  }, [folderMap, addresses, collapsedFolders, inboxSearch]);
+    pinnedRows.sort((a, b) => (pinnedIndex.get(a.key) ?? 0) - (pinnedIndex.get(b.key) ?? 0));
+    const unpinned = layout.folderPlacement === "top" ? [...folderRows, ...inboxRows] : [...inboxRows, ...folderRows];
+    return [...pinnedRows, ...unpinned];
+  }, [folderMap, addresses, collapsedFolders, inboxSearch, layout.pinnedItems, layout.folderPlacement]);
 
   useEffect(() => {
     if (selectedFolderId) return;
@@ -217,13 +236,43 @@ export default function Index() {
 
   const hasOnlyManualAccounts = accounts.length > 0 && accounts.every((a) => a.type === "manual");
 
-  const updateLayout = (patch: Partial<InboxLayout>) => {
+  const updateLayout = (patch: Partial<InboxLayout> | ((current: InboxLayout) => InboxLayout)) => {
     setLayout((current) => {
-      const next = { ...current, ...patch };
+      const next = typeof patch === "function" ? patch(current) : { ...current, ...patch };
       void saveInboxLayout(next);
       return next;
     });
   };
+
+  const togglePin = (key: string) => updateLayout((current) => ({
+    ...current,
+    pinnedItems: current.pinnedItems.includes(key)
+      ? current.pinnedItems.filter((item) => item !== key)
+      : [...current.pinnedItems, key],
+  }));
+
+  const movePinned = (key: string, direction: -1 | 1) => updateLayout((current) => {
+    const index = current.pinnedItems.indexOf(key);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= current.pinnedItems.length) return current;
+    const pinnedItems = [...current.pinnedItems];
+    [pinnedItems[index], pinnedItems[target]] = [pinnedItems[target], pinnedItems[index]];
+    return { ...current, pinnedItems };
+  });
+
+  const pinControls = (item: NavItem) => (
+    <View style={{ flexDirection: "row", alignItems: "center" }}>
+      <Pressable onPress={() => togglePin(item.key)} accessibilityLabel={item.pinned ? "Unpin" : "Pin"} style={{ paddingHorizontal: 5, paddingVertical: 6, justifyContent: "center" }}>
+        <T style={{ color: item.pinned ? "#fbbf24" : "#666", fontSize: 14 }}>{item.pinned ? "★" : "☆"}</T>
+      </Pressable>
+      {item.pinned && (
+        <>
+          <Pressable onPress={() => movePinned(item.key, -1)} accessibilityLabel="Move pin up" style={{ paddingHorizontal: 3, justifyContent: "center" }}><T style={{ color: "#aaa", fontSize: 12 }}>↑</T></Pressable>
+          <Pressable onPress={() => movePinned(item.key, 1)} accessibilityLabel="Move pin down" style={{ paddingHorizontal: 3, justifyContent: "center" }}><T style={{ color: "#aaa", fontSize: 12 }}>↓</T></Pressable>
+        </>
+      )}
+    </View>
+  );
 
   const toggleInboxFolder = (folderId: string) => {
     const collapse = !collapsedFolders.includes(folderId);
@@ -346,25 +395,29 @@ export default function Index() {
                     <T style={{ fontSize: 12 }}>{inboxSortDesc ? "↓ Desc" : "↑ Asc"}</T>
                   </Pressable>
                 </View>
+                <Pressable onPress={() => updateLayout((current) => ({ ...current, folderPlacement: current.folderPlacement === "top" ? "bottom" : "top" }))} style={{ borderWidth: 1, borderColor: "#333", borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 8, alignSelf: "flex-start" }}>
+                  <T style={{ fontSize: 12 }}>Folders: {layout.folderPlacement === "top" ? "above" : "below"} inboxes</T>
+                </Pressable>
 
                 {!!accounts.some((account) => account.type === "gmail") && <Pressable disabled={olderLoading || !hasOlder} onPress={loadOlderManually} style={{ padding: 9, borderWidth: 1, borderColor: "#333", borderRadius: 8, marginBottom: 8, backgroundColor: "#101010", opacity: olderLoading || !hasOlder ? 0.55 : 1 }}><T style={{ textAlign: "center", fontWeight: "600" }}>{olderLoading ? "Syncing older messages…" : hasOlder ? "Load older messages" : "All available messages loaded"}</T></Pressable>}
                 <FlatList
                   data={navItems}
-                  keyExtractor={(item) => item.type === "folder" ? `folder:${item.id}` : `inbox:${item.address}:${item.folderId || ""}`}
+                  keyExtractor={(item) => item.key}
                   ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
                   renderItem={({ item: navItem }) => {
                     if (navItem.type === "folder") {
                       const isCollapsed = collapsedFolders.includes(navItem.id);
                       const selected = selectedFolderId === navItem.id;
                       return (
-                        <View style={{ flexDirection: "row", gap: 4 }}>
+                        <View style={{ flexDirection: "row", gap: 4, alignItems: "stretch" }}>
                           <Pressable
                             onPress={() => { setSelectedFolderId(navItem.id); setSelectedAddress(null); }}
                             style={{ flex: 1, padding: 9, backgroundColor: selected ? "#152032" : "#101010", borderRadius: 8, borderWidth: 1, borderColor: selected ? "#3b82f6" : "#252525" }}
                           >
-                            <T style={{ fontWeight: "700" }}>{navItem.name}</T>
+                            <T style={{ fontWeight: "700" }}>{navItem.pinned ? "★ " : ""}{navItem.name}</T>
                             <T style={{ color: "#777", fontSize: 12 }}>{navItem.inboxes.length} inbox(es) · {navItem.count} message(s)</T>
                           </Pressable>
+                          {pinControls(navItem)}
                           <Pressable onPress={() => toggleInboxFolder(navItem.id)} accessibilityLabel={`Toggle ${navItem.name}`} style={{ padding: 9, backgroundColor: "#101010", borderRadius: 8, borderWidth: 1, borderColor: "#252525", justifyContent: "center" }}>
                             <T>{isCollapsed ? "+" : "−"}</T>
                           </Pressable>
@@ -375,21 +428,25 @@ export default function Index() {
                     const list = groups[address] || [];
                     const selected = !selectedFolderId && address === selectedAddress;
                     return (
-                      <Pressable
-                        onPress={() => { setSelectedFolderId(null); setSelectedAddress(address); }}
-                        style={({ pressed }) => ({
-                          padding: 10,
-                          paddingLeft: navItem.folderId ? 22 : 10,
-                          backgroundColor: selected ? "#0f0f0f" : pressed ? "#0a0a0a" : "#050505",
-                          borderRadius: 10,
-                          borderWidth: 1,
-                          borderColor: selected ? "#2a2a2a" : "#1a1a1a",
-                        })}
-                      >
-                        <T style={{ fontSize: 15, fontWeight: "600", marginBottom: 2 }}>{address}</T>
-                        <T style={{ color: "#bbb" }} numberOfLines={1}>{list[0]?.subject ?? ""}</T>
-                        <T style={{ color: "#666", marginTop: 4 }}>{list.length} message(s)</T>
-                      </Pressable>
+                      <View style={{ flexDirection: "row", alignItems: "stretch", gap: 2 }}>
+                        <Pressable
+                          onPress={() => { setSelectedFolderId(null); setSelectedAddress(address); }}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            padding: 10,
+                            paddingLeft: navItem.folderId ? 22 : 10,
+                            backgroundColor: selected ? "#0f0f0f" : pressed ? "#0a0a0a" : "#050505",
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: selected ? "#2a2a2a" : "#1a1a1a",
+                          })}
+                        >
+                          <T style={{ fontSize: 15, fontWeight: "600", marginBottom: 2 }}>{navItem.pinned ? "★ " : ""}{address}</T>
+                          <T style={{ color: "#bbb" }} numberOfLines={1}>{list[0]?.subject ?? ""}</T>
+                          <T style={{ color: "#666", marginTop: 4 }}>{list.length} message(s)</T>
+                        </Pressable>
+                        {pinControls(navItem)}
+                      </View>
                     );
                   }}
                 />
