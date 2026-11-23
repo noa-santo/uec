@@ -41,6 +41,14 @@
 .uec-tester-bar button:hover { background: #475569; }
 .uec-test-match { color: #38bdf8; }
 
+/* ── unrouted address quick actions ──────────────────────────────────────── */
+.uec-unresolved { padding: 10px 16px; border-bottom: 1px solid #1e293b; background: #101827; }
+.uec-unresolved > strong { display: block; margin-bottom: 8px; color: #fbbf24; }
+.uec-unresolved > strong span { color: #94a3b8; font-weight: 400; }
+.uec-unresolved-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 92px; overflow: auto; }
+.uec-unresolved-list button { background: #172554; border: 1px solid #1d4ed8; }
+.uec-unresolved-list button small { margin-left: 6px; color: #bfdbfe; }
+
 /* ── inline editor panel ─────────────────────────────────────────────────── */
 .uec-inline-editor {
   display: flex;

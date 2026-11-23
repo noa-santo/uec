@@ -191,7 +191,7 @@ export async function fetchGmailEmails(
   if (ids.length === 0) return { emails: [], nextPageToken, reachedOneMonthAgo: true };
 
   // Cache the list of IDs and nextPageToken
-  if (account.email) {
+  if (account.email && !pageToken) {
     await setCachedEmailList(account.email, ids, nextPageToken);
   }
 
@@ -251,6 +251,17 @@ export async function fetchGmailEmailsOneMonth(account: GmailAccount, maxResults
     gmailPageTokenCache[account.email] = pageToken;
   }
   return allEmails;
+}
+
+export async function fetchOlderGmailEmails(account: GmailAccount, firstPageToken?: string, maxPages = 10): Promise<Email[]> {
+  const collected: Email[] = [];
+  let token = firstPageToken;
+  for (let page = 0; token && page < maxPages; page++) {
+    const result = await fetchGmailEmails(account, 50, token, false);
+    collected.push(...result.emails);
+    token = result.nextPageToken;
+  }
+  return collected;
 }
 
 export async function fetchAllEmailsFromAccounts(accounts: MailAccount[]): Promise<Email[]> {

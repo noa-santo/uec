@@ -27,6 +27,7 @@ import {
   validateRule,
   resolveInbox,
 } from "@/lib/alias_rules";
+import { loadUnresolvedAddresses, saveUnresolvedAddresses } from "@/lib/email_utils";
 import "./node-editor.css";
 
 // ── tiny uid ────────────────────────────────────────────────────────────────
@@ -163,9 +164,11 @@ export function NodeEditor() {
   const [status, setStatus] = useState("");
   const [testAddress, setTestAddress] = useState("");
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [unresolved, setUnresolved] = useState<string[]>([]);
 
   // ── load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
+    loadUnresolvedAddresses().then(setUnresolved);
     loadAliasRules().then((saved) => {
       setRules(saved);
       const { nodes: n, edges: e } = rulesToGraph(saved);
@@ -238,9 +241,10 @@ export function NodeEditor() {
   // ── node change callback: persist on move/label change ────────────────────
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
-      onNodesChange(changes);
-      // schedule a save after node drag ends
-      const hasDrag = changes.some((c) => c.type === "position" && !c.dragging);
+      const changeList: any[] = Array.isArray(changes) ? changes : (typeof (changes as any)?.toArray === "function" ? (changes as any).toArray() : []);
+      onNodesChange(changes as any);
+      // React Flow emits either a single change or a list depending on event path/version.
+      const hasDrag = changeList.some((c: any) => c.type === "position" && !c.dragging);
       if (hasDrag) {
         // nodes state hasn't updated yet; defer one tick
         setTimeout(() => persist(nodes, edges), 0);
@@ -276,6 +280,24 @@ export function NodeEditor() {
     const nextNodes = [...nodes, next];
     setNodes(nextNodes);
     setEditingId(id);
+  };
+
+  const addExactRouteForAddress = (address: string) => {
+    const normalized = address.trim().toLowerCase();
+    if (!normalized || rules.some((rule) => rule.matchType === "exact" && rule.alias.toLowerCase() === normalized)) return;
+    const ruleId = uid();
+    const inboxId = `i_${uid()}`;
+    const pattern: Node<PatternData> = { id: `p_${ruleId}`, type: "pattern", position: { x: 80, y: 80 + nodes.length * 28 }, data: { kind: "pattern", alias: normalized, matchType: "exact", enabled: true } };
+    const inbox: Node<InboxData> = { id: inboxId, type: "inbox", position: { x: 500, y: 80 + nodes.length * 28 }, data: { kind: "inbox", name: normalized } };
+    const edge: Edge = { id: `e_${ruleId}`, source: pattern.id, sourceHandle: "out", target: inboxId, targetHandle: "in", markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" }, style: { stroke: "#3b82f6", strokeWidth: 2 }, data: { ruleId } };
+    const nextNodes = [...nodes, pattern, inbox];
+    const nextEdges = [...edges, edge];
+    setNodes(nextNodes); setEdges(nextEdges); persist(nextNodes, nextEdges);
+    setUnresolved((current) => {
+      const remaining = current.filter((item) => item !== normalized);
+      void saveUnresolvedAddresses(remaining);
+      return remaining;
+    });
   };
 
   // ── inline editing ────────────────────────────────────────────────────────
@@ -371,6 +393,11 @@ export function NodeEditor() {
           </span>
         )}
       </div>
+
+      {unresolved.length > 0 && <section className="uec-unresolved" aria-label="Unrouted addresses">
+        <strong>Unrouted addresses <span>({unresolved.length})</span></strong>
+        <div className="uec-unresolved-list">{unresolved.map((address) => <button type="button" key={address} onClick={() => addExactRouteForAddress(address)} title={`Create exact-match route for ${address}`}>＋ {address} <small>Add exact route</small></button>)}</div>
+      </section>}
 
       {/* ── inline editor panel ─────────────────────────────────────── */}
       {editingNode && (

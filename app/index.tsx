@@ -216,7 +216,7 @@ export default function Index() {
               <TypewriterText text="Message" startDelayMs={1000} pauseAtEndMs={900} />
             </Heading>
             {selectedMessage ? (
-              <View style={{ flex: 1, maxHeight: "100%", overflowY: "scroll"}}>
+              <View style={{ flex: 1, maxHeight: "100%", overflow: Platform.OS === "web" ? "scroll" : undefined }}>
                 <Heading style={{ fontSize: 18, fontWeight: "700", marginBottom: 8 }}>{selectedMessage.subject}</Heading>
                 <T style={{ color: "#bbb" }}>From: {selectedMessage.from}</T>
                 <T style={{ color: "#bbb" }}>To: {selectedMessage.to}</T>
