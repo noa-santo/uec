@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Email, groupByToAddress } from "@/lib/email_utils";
 import { getAccounts } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts } from "@/lib/gmail";
+import { loadAliasRules } from "@/lib/alias_rules";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
@@ -49,13 +50,15 @@ export default function Index() {
   const [items, setItems] = useState<Email[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [aliasRules, setAliasRules] = useState<Awaited<ReturnType<typeof loadAliasRules>>>([]);
 
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-        const accs = await getAccounts();
+        const [accs, rules] = await Promise.all([getAccounts(), loadAliasRules()]);
         const emails = await fetchAllEmailsFromAccounts(accs);
+        setAliasRules(rules);
         setItems(emails);
       } catch (e: any) {
         setError(String(e?.message || e));
@@ -65,7 +68,7 @@ export default function Index() {
     })();
   }, []);
 
-  const groups = useMemo(() => groupByToAddress(items), [items]);
+  const groups = useMemo(() => groupByToAddress(items, aliasRules), [items, aliasRules]);
   const addresses = useMemo(() => Object.keys(groups).sort(), [groups]);
 
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);

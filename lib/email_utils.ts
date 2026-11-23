@@ -12,9 +12,12 @@ export type Email = {
   bodyHtml?: string; // text/html content when available
 };
 
-export function groupByToAddress(list: Email[]): Record<string, Email[]> {
+import { AliasRule, resolveInbox } from "./alias_rules";
+
+export function groupByToAddress(list: Email[], rules: AliasRule[] = []): Record<string, Email[]> {
   return list.reduce((acc, e) => {
-    (acc[e.to] ||= []).push(e);
+    const inbox = resolveInbox(e.to, rules);
+    (acc[inbox] ||= []).push(e);
     return acc;
   }, {} as Record<string, Email[]>);
 }

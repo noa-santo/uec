@@ -41,7 +41,7 @@ export default function RootLayout() {
         <Stack.Screen name="inbox/[address]" options={{ title: "Inbox" }} />
         <Stack.Screen name="mail/[id]" options={{ title: "Message" }} />
         <Stack.Screen name="accounts" options={{ title: "Accounts" }} />
-        <Stack.Screen name="editor/index" options={{ title: "Node Editor (Preview)", headerRight: () => null }} />
+        <Stack.Screen name="editor/index" options={{ title: "Alias Routing", headerRight: () => null }} />
       </Stack>
     </>
   );

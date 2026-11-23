@@ -62,16 +62,10 @@ export default function AccountsScreen() {
   const [inUser, setInUser] = useState("");
   const [inPass, setInPass] = useState("");
 
-  const [outHost, setOutHost] = useState("");
-  const [outPort, setOutPort] = useState("465");
-  const [outSecure, setOutSecure] = useState(true);
-  const [outUser, setOutUser] = useState("");
-  const [outPass, setOutPass] = useState("");
-
   const [request, response, promptAsync] = Google.useAuthRequest({
-    iosClientId: undefined,
-    androidClientId: undefined,
-    webClientId: "588712609661-jbisev2plae031njtjrqv86hu7mboher.apps.googleusercontent.com",
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "missing-ios-client-id",
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "missing-android-client-id",
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "missing-web-client-id",
     scopes: ["openid", "email", "profile", "https://mail.google.com/"],
     redirectUri: AuthSession.makeRedirectUri({ scheme: "uec" }),
     responseType: AuthSession.ResponseType.Token,
@@ -79,6 +73,7 @@ export default function AccountsScreen() {
   });
 
   const [modalVisible, setModalVisible] = useState(false);
+  const gmailConfigured = Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -118,19 +113,12 @@ export default function AccountsScreen() {
         username: inUser.trim(),
         password: inPass,
       },
-      outgoing: {
-        host: outHost.trim() || inHost.trim(),
-        port: parseInt(outPort, 10) || 465,
-        secure: outSecure,
-        username: (outUser || inUser).trim(),
-        password: outPass || inPass,
-      },
     };
     await addAccount(manual);
     const list = await getAccounts();
     setAccounts(list);
     setShowManual(false);
-    Alert.alert("Account saved", "Manual server settings stored securely. Note: Connectivity will require a backend or RN socket-capable library.");
+    Alert.alert("Account saved", "Manual server settings stored securely. Note: Incoming mail sync requires a socket-capable library or backend.");
   };
 
   const handleRemove = async () => {
@@ -147,9 +135,9 @@ export default function AccountsScreen() {
     <ScrollView style={{ flex: 1, backgroundColor: "#000", padding: 12 }} contentContainerStyle={{ paddingBottom: 60 }}>
       <Heading style={{ fontSize: 22, marginBottom: 12 }}>Accounts</Heading>
 
-      <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+      <View style={{ flexDirection: "row", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <Pressable
-          disabled={!request}
+          disabled={!request || !gmailConfigured}
           onPress={() => promptAsync()}
           style={({ pressed }) => ({
             paddingHorizontal: 12,
@@ -162,6 +150,7 @@ export default function AccountsScreen() {
         >
           <T>Add Gmail account</T>
         </Pressable>
+        {!gmailConfigured && <T style={{ color: "#f0ad4e", alignSelf: "center" }}>Set Google client IDs in .env to enable Gmail.</T>}
 
         <Pressable
           onPress={() => setShowManual((s) => !s)}
@@ -172,16 +161,15 @@ export default function AccountsScreen() {
             borderColor: "#333",
             borderRadius: 8,
             backgroundColor: pressed ? "#0a0a0a" : "#050505",
-            marginLeft: 8,
           })}
         >
-          <T>{showManual ? "Hide manual setup" : "Add manual IMAP/POP/SMTP"}</T>
+          <T>{showManual ? "Hide manual setup" : "Add manual incoming (IMAP/POP)"}</T>
         </Pressable>
       </View>
 
       {showManual && (
         <FadeSlideIn delay={80} style={{ borderWidth: 1, borderColor: "#222", borderRadius: 10, padding: 12, marginBottom: 20, backgroundColor: "#070707" }}>
-          <Heading style={{ fontSize: 18, marginBottom: 10 }}>Manual configuration</Heading>
+          <Heading style={{ fontSize: 18, marginBottom: 10 }}>Manual incoming configuration</Heading>
 
           <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
             {(["imap", "pop3"] as const).map((p) => (
@@ -216,26 +204,12 @@ export default function AccountsScreen() {
           <LabeledInput label="Username" value={inUser} onChangeText={setInUser} placeholder="user@example.com" />
           <LabeledInput label="Password" value={inPass} onChangeText={setInPass} placeholder="password" secureTextEntry />
 
-          <Heading style={{ fontSize: 16, marginBottom: 6, marginTop: 10 }}>Outgoing (SMTP)</Heading>
-          <LabeledInput label="Host" value={outHost} onChangeText={setOutHost} placeholder="smtp.example.com" />
-          <LabeledInput label="Port" value={outPort} onChangeText={setOutPort} placeholder="465" keyboardType="number-pad" />
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
-            <Pressable onPress={() => setOutSecure(true)} style={{ padding: 8, borderWidth: 1, borderColor: outSecure ? "#666" : "#333", borderRadius: 6 }}>
-              <T>TLS</T>
-            </Pressable>
-            <Pressable onPress={() => setOutSecure(false)} style={{ padding: 8, borderWidth: 1, borderColor: !outSecure ? "#666" : "#333", borderRadius: 6 }}>
-              <T>Plain</T>
-            </Pressable>
-          </View>
-          <LabeledInput label="Username" value={outUser} onChangeText={setOutUser} placeholder="user@example.com" />
-          <LabeledInput label="Password" value={outPass} onChangeText={setOutPass} placeholder="password" secureTextEntry />
-
           <Pressable onPress={addManual} style={({ pressed }) => ({ padding: 12, borderWidth: 1, borderColor: "#333", borderRadius: 8, backgroundColor: pressed ? "#0a0a0a" : "#050505", marginTop: 6 })}>
             <T>Save account</T>
           </Pressable>
 
           <T style={{ color: "#aaa", marginTop: 10 }}>
-            Note: React Native apps cannot directly open IMAP/POP/SMTP sockets without additional native modules or a backend. This app stores settings securely now; actual mail sync will require adding a backend or socket-capable libraries.
+            Note: Outgoing mail (SMTP) is omitted. Incoming mail requires a socket-capable library or backend.
           </T>
         </FadeSlideIn>
       )}
@@ -259,7 +233,7 @@ export default function AccountsScreen() {
                       <T style={{ color: "#bbb", marginTop: 4 }}>Access token stored. Expires at: {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "unknown"}</T>
                     )}
                     {item.type === "manual" && (
-                      <T style={{ color: "#bbb", marginTop: 4 }}>{item.incoming.protocol.toUpperCase()} {item.incoming.username}@{item.incoming.host} / SMTP {item.outgoing.host}</T>
+                      <T style={{ color: "#bbb", marginTop: 4 }}>{item.incoming.protocol.toUpperCase()} {item.incoming.username}@{item.incoming.host}</T>
                     )}
                   </View>
                   <Pressable

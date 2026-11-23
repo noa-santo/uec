@@ -4,14 +4,6 @@ import {Platform} from "react-native";
 
 export type Protocol = "imap" | "pop3";
 
-export type SmtpConfig = {
-  host: string;
-  port: number;
-  secure: boolean; // TLS
-  username: string;
-  password?: string; // optional if using OAuth2
-};
-
 export type ImapPopConfig = {
   protocol: Protocol;
   host: string;
@@ -35,7 +27,6 @@ export type ManualAccount = {
   type: "manual";
   displayName?: string;
   incoming: ImapPopConfig;
-  outgoing: SmtpConfig;
 };
 
 export type MailAccount = GmailAccount | ManualAccount;

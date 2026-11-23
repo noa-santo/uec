@@ -2,7 +2,7 @@
 
 This is a cross-platform Expo app packaged as a Tauri desktop application. Android remains available through Expo, while Linux desktop uses the Tauri native shell (with a Nix/NixOS-compatible build environment).
 
-Primary feature in this prototype: virtual inboxes grouped by the address an email was sent to (useful for users with many alias addresses pointing to one inbox). Future work includes a node‑based editor to map addresses to actual and virtual inboxes.
+Primary feature in this prototype: virtual inboxes grouped by the address an email was sent to (useful for users with many alias addresses pointing to one inbox). The node editor maps incoming alias addresses to named virtual inboxes and persists those routes across sessions.
 
 ## Get started
 
@@ -28,7 +28,7 @@ The app uses file‑based routing (expo-router). Main screens:
 - Accounts (add Gmail or manual IMAP/POP/SMTP) (app/accounts.tsx)
 - Inbox by address (app/inbox/[address].tsx)
 - Message detail (app/mail/[id].tsx)
-- Node Editor placeholder (app/editor/index.tsx)
+- Alias Node Editor (app/editor/index.tsx)
 
 ## Accounts: Gmail and Manual IMAP/POP/SMTP
 
