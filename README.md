@@ -1,6 +1,6 @@
 # UEC — Ultimate Email Client (Prototype)
 
-This is a cross‑platform Expo app (Android + Web). On Linux desktop, run the Web build in your browser for a desktop experience.
+This is a cross-platform Expo app packaged as a Tauri desktop application. Android remains available through Expo, while Linux desktop uses the Tauri native shell (with a Nix/NixOS-compatible build environment).
 
 Primary feature in this prototype: virtual inboxes grouped by the address an email was sent to (useful for users with many alias addresses pointing to one inbox). Future work includes a node‑based editor to map addresses to actual and virtual inboxes.
 
@@ -9,18 +9,19 @@ Primary feature in this prototype: virtual inboxes grouped by the address an ema
 1. Install dependencies
 
    ```bash
-   npm install
+   pnpm install
    ```
 
 2. Start the app
 
    ```bash
-   npm start
+   pnpm start
    ```
 
 3. Open on your target:
-   - Web (Linux desktop): press "w" in the Expo CLI to open in the browser.
-   - Android: press "a" for an emulator, or scan the QR code with Expo Go.
+   - Web preview: `pnpm run web`
+   - Android: `pnpm run android` for an emulator, or scan the QR code with Expo Go.
+   - Linux desktop: `pnpm run tauri:cli dev` (requires GTK/WebKitGTK; Nix users can use the CI shell or the shell example below).
 
 The app uses file‑based routing (expo-router). Main screens:
 - Virtual Inboxes (app/index.tsx)
@@ -29,22 +30,17 @@ The app uses file‑based routing (expo-router). Main screens:
 - Message detail (app/mail/[id].tsx)
 - Node Editor placeholder (app/editor/index.tsx)
 
-## Accounts: Gmail & Manual IMAP/POP/SMTP
+## Accounts: Gmail and Manual IMAP/POP/SMTP
 
-The Accounts screen lets you:
-- Sign in with Google and store an OAuth access token (scopes include https://mail.google.com/). The app verifies the token by calling Google userinfo and stores the email when available.
-- Add a manual account by entering incoming (IMAP/POP3) and outgoing (SMTP) server settings. These are stored securely using expo-secure-store.
-
-### Configure Google OAuth
-1. Create OAuth credentials in Google Cloud Console for your platforms (Web, Android, iOS).
-2. Set the app scheme to `uec` (already set in app.json). Add authorized redirect URIs like:
-   - Expo proxy: https://auth.expo.dev/@owo.computer/uec
-   - Native: uec://redirect
-   - Web dev: http://localhost:19006
-3. Provide your client IDs in `app/accounts.tsx` inside `Google.useAuthRequest` (iosClientId, androidClientId, webClientId). Alternatively, use environment variables and read them here.
-4. Run the app and tap "Sign in with Google" in Accounts.
+The Accounts screen supports Gmail OAuth and manual incoming (IMAP/POP3) plus outgoing (SMTP) server settings. Gmail sync uses the Gmail API; manual server settings are stored using expo-secure-store on native platforms and AsyncStorage on web. The manual transport itself still requires a backend or native socket implementation.
 
 ## Scripts
-- `npm start` — start the dev server
-- `npm run web` — start the web target directly
-- `npm run android` — start the Android target directly
+- `pnpm start` — start the dev server
+- `pnpm run web` — start the web target directly
+- `pnpm run android` — start the Android target directly
+- `pnpm run tauri:cli dev` — start the native Linux desktop shell
+- `pnpm run tauri:cli build` — build native Linux installers
+
+### NixOS/Linux native build
+
+The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The CI workflow in `.github/workflows/build-tauri.yml` declares these dependencies in its Nix shell; on NixOS, run the same commands inside a `nix-shell`/`nix develop` environment, then use `pnpm install --frozen-lockfile` and `pnpm run tauri:cli build`.

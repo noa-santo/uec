@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "https://uecdev.ngrok.io/",
-    "beforeDevCommand": "npm run start",
-    "beforeBuildCommand": "npx expo export"
+    "beforeDevCommand": "pnpm run start",
+    "beforeBuildCommand": "pnpm exec expo export"
   },
   "app": {
     "windows": [

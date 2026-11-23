@@ -12,7 +12,7 @@ function decodeBody(data?: string): string | undefined {
   if (!data) return undefined;
   try {
     const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
-    const decoded = typeof atob !== "undefined" ? atob(b64) : (typeof Buffer !== "undefined" ? Buffer.from(b64, "base64").toString("utf8") : undefined);
+    const decoded = typeof atob !== "undefined" ? atob(b64) : undefined;
     if (decoded === undefined) return undefined;
     return decoded;
   } catch {

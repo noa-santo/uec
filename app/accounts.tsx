@@ -160,7 +160,7 @@ export default function AccountsScreen() {
             backgroundColor: pressed ? "#0a0a0a" : "#050505",
           })}
         >
-          <T>Sign in with Google</T>
+          <T>Add Gmail account</T>
         </Pressable>
 
         <Pressable
