@@ -14,9 +14,10 @@
       packages = nixpkgs.lib.genAttrs systems (system:
         let pkgs = import nixpkgs { inherit system; };
         in { default = pkgs.writeShellApplication { name = "uec-build"; runtimeInputs = with pkgs; [ nodejs_22 pnpm cargo ]; text = ''
-          pnpm install --frozen-lockfile
-          pnpm exec expo export --platform web
-          cargo tauri build
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm exec expo export --platform web
+          corepack pnpm exec tauri build
         ''; }; });
       apps = nixpkgs.lib.genAttrs systems (system: { default = { type = "app"; program = "${self.packages.${system}.default}/bin/uec-build"; }; });
       checks = nixpkgs.lib.genAttrs systems (system: { default = self.devShells.${system}.default; });

@@ -32,7 +32,7 @@ The app uses file‑based routing (expo-router). Main screens:
 
 ## Accounts: Gmail & Manual IMAP/POP
 
-- **Gmail**: Syncs emails via the Gmail REST API using OAuth2 client IDs configured in `.env`.
+- **Gmail**: Syncs emails via the Gmail REST API using OAuth2 client IDs configured in `.env`. The sign-in requests offline access so a refresh token is stored; expired access tokens are renewed automatically. If Google returns `client_secret is missing`, use a **Desktop app** OAuth client ID (PKCE, no secret) for Tauri/web, or set `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET` for a Web application client. The Accounts screen has a **Reconnect** button for sessions whose refresh token was lost.
 - **Manual (IMAP/POP)**: Stores credentials securely in `expo-secure-store` / `AsyncStorage`. Note: Direct TCP/TLS sockets for IMAP/POP cannot be opened in browser/React Native sandboxes without a backend daemon or native socket layer. The UI clearly displays configured manual accounts.
 
 ## Virtual Inbox Routing & Pattern Matching
@@ -48,7 +48,7 @@ An interactive test resolver is built directly into the node editor so you can v
 
 ### Node editor
 
-The web node editor has a node-type sidebar with tabs (Conditions, Logic, Inboxes). Clicking a type creates that node in the centre of the current view and opens its configuration dialog. Double-click a node to edit it again; drag between handles to connect nodes. Configuration changes are saved automatically.
+The web node editor has a node-type sidebar with tabs (Conditions, Logic, Inboxes). Clicking a type creates that node in the centre of the current view and opens its configuration dialog. Double-click a node to edit it again. To connect, drag from an **out** handle to an **in** handle, or click a node and then click a highlighted compatible target; the sidebar has a connection guide and incompatible links explain why they cannot be made. Configuration changes are saved automatically.
 
 Folder nodes are purely configuration: they group virtual inboxes in the main view but never hide nodes or edges in the graph. Enable **Include catch-all / unsorted inboxes** on a folder to collect every virtual inbox created by a catch-all rule — including dynamic names derived from sender, subject or sender domain. Folders that already contain the catch-all rule's inbox name (for example, "Other") collect those inboxes automatically. Those folders show the real inbox and message counts and can be opened to read all their messages together.
 
@@ -62,6 +62,8 @@ Virtual inboxes and folders can be searched and sorted by name, message count, o
 
 Settings and cached messages go through a quota-aware storage facade. Gmail bodies are capped and old cache entries are evicted when browser storage fills up, so saving node routes can no longer crash with "Quota exceeded" — a failed write is reported in the editor status instead.
 
+The inbox view reloads rules/folders whenever it regains focus or a settings save event fires, so edits made in the node editor are applied immediately even though stack screens stay mounted.
+
 ## Scripts
 - `pnpm start` — start the dev server
 - `pnpm test` — run unit test suite
@@ -72,4 +74,4 @@ Settings and cached messages go through a quota-aware storage facade. Gmail bodi
 
 ### NixOS/Linux native build
 
-The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The CI workflow in `.github/workflows/build-tauri.yml` declares these dependencies in its Nix shell; on NixOS, run the same commands inside a `nix-shell`/`nix develop` environment, then use `pnpm install --frozen-lockfile` and `pnpm run tauri:cli build`.
+The Tauri build needs Rust, Node.js, pnpm, GTK3, WebKitGTK 4.1, and the standard Linux packaging tools. The web app is exported as a **single-page app** (`web.output: "single"`): static prerendering cannot build routes that call OAuth/navigation hooks at render time. The CI workflow in `.github/workflows/build-tauri.yml` declares the dependencies in its Nix shell and runs `pnpm exec tauri build` from the repository root; on NixOS, use `nix develop` or the same shell, then `corepack pnpm install --frozen-lockfile && corepack pnpm exec tauri build`. Debian packages and AppImages are produced.

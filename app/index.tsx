@@ -1,11 +1,13 @@
 import { FlatList, Pressable, Text, TextInput, View, useWindowDimensions, ActivityIndicator, Platform } from "react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { Email, groupByToAddress, saveUnresolvedAddresses, unresolvedAddressesFromEmails } from "@/lib/email_utils";
 import { getAccounts, GmailAccount, MailAccount } from "@/lib/accounts";
 import { fetchAllEmailsFromAccounts, fetchOlderGmailEmails } from "@/lib/gmail";
 import { loadAliasRules } from "@/lib/alias_rules";
 import { InboxFolder, folderInboxNames, folderMessages, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
 import { DEFAULT_INBOX_LAYOUT, InboxLayout, loadInboxLayout, saveInboxLayout } from "@/lib/ui_layout";
+import { subscribeToSettings } from "@/lib/settings_events";
 import { HtmlViewer } from "@/components/HtmlViewer";
 import { FadeSlideIn } from "@/components/animations";
 import TypewriterText from "@/components/TypewriterText";
@@ -85,32 +87,62 @@ export default function Index() {
   const { width } = useWindowDimensions();
   const isNarrow = width < 900;
 
-  useEffect(() => { loadInboxFolders().then((saved) => { setFolders(saved); setCollapsedFolders(saved.filter((folder) => folder.collapsed).map((folder) => folder.id)); }); }, []);
+  const accountSignature = useRef<string | null>(null);
+
+  const reloadSettings = useCallback(async () => {
+    const [accs, rules, savedFolders] = await Promise.all([getAccounts(), loadAliasRules(), loadInboxFolders()]);
+    setAccounts(accs);
+    setAliasRules(rules);
+    setFolders(savedFolders);
+    setCollapsedFolders(savedFolders.filter((folder) => folder.collapsed).map((folder) => folder.id));
+    const signature = accs.map((account) => account.id).sort().join(",");
+    if (accountSignature.current !== null && signature !== accountSignature.current) {
+      // An account was added or removed while we were on another screen.
+      void fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
+        setOlderLoading(syncing);
+        setHasOlder(more);
+        setItems((current) => {
+          const ids = new Set(current.map((email) => email.id));
+          return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+        });
+      }).then((emails) => setItems(emails)).catch((e: any) => setError(String(e?.message || e)));
+    }
+    accountSignature.current = signature;
+  }, []);
+
+  const loadEmails = useCallback(async (accs: MailAccount[]) => {
+    try {
+      setLoading(true);
+      const emails = await fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
+        setOlderLoading(syncing);
+        setHasOlder(more);
+        setItems((current) => {
+          const ids = new Set(current.map((email) => email.id));
+          return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
+        });
+      });
+      setItems(emails);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => { loadInboxLayout().then(setLayout); }, []);
+
+  // Stack screens are kept mounted, so reload on every focus and whenever a
+  // settings persister (node editor / accounts screen) signals a change.
+  useFocusEffect(useCallback(() => { void reloadSettings(); }, [reloadSettings]));
+  useEffect(() => subscribeToSettings(() => { void reloadSettings(); }), [reloadSettings]);
 
   useEffect(() => {
     (async () => {
-      try {
-        setLoading(true);
-        const [accs, rules] = await Promise.all([getAccounts(), loadAliasRules()]);
-        setAccounts(accs);
-        const emails = await fetchAllEmailsFromAccounts(accs, (_account, pageEmails, more, syncing) => {
-          setOlderLoading(syncing);
-          setHasOlder(more);
-          setItems((current) => {
-            const ids = new Set(current.map((email) => email.id));
-            return [...current, ...pageEmails.filter((email) => !ids.has(email.id))];
-          });
-        });
-        setAliasRules(rules);
-        setItems(emails);
-      } catch (e: any) {
-        setError(String(e?.message || e));
-      } finally {
-        setLoading(false);
-      }
+      const accs = await getAccounts();
+      accountSignature.current = accs.map((account) => account.id).sort().join(",");
+      await Promise.all([reloadSettings(), loadEmails(accs)]);
     })();
-  }, []);
+  }, [loadEmails, reloadSettings]);
 
   // Keep resolver suggestions in sync with every page loaded, including older mail.
   useEffect(() => {

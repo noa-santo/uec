@@ -75,31 +75,68 @@ export function makeId(prefix: string = "acct"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function getValidGmailAccount(account: GmailAccount): Promise<GmailAccount> {
-  if (account.expiresAt && account.expiresAt > Date.now() + 60_000) return account;
-  if (!account.refreshToken) {
-    if (account.expiresAt && account.expiresAt <= Date.now()) throw new Error("Gmail session expired. Reconnect this account to renew access.");
-    return account;
-  }
-  const clientId = Platform.OS === "ios"
+export function googleOAuthConfig(): { clientId?: string; clientSecret?: string; platform: string } {
+  const platform = Platform.OS;
+  const clientId = platform === "ios"
     ? process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID
-    : Platform.OS === "android"
+    : platform === "android"
       ? process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
       : process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+  // Web OAuth clients require a client secret on the token endpoint. Desktop
+  // app clients (recommended for Tauri/web here) deliberately have none and use
+  // PKCE instead.
+  const clientSecret = platform === "web" ? process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET || undefined : undefined;
+  return { clientId, clientSecret, platform };
+}
+
+const refreshInFlight = new Map<string, Promise<GmailAccount>>();
+
+async function refreshGmailAccount(account: GmailAccount): Promise<GmailAccount> {
+  if (!account.refreshToken) {
+    throw new Error("Gmail session expired and no refresh token was stored. Reconnect the account with offline access.");
+  }
+  const { clientId, clientSecret } = googleOAuthConfig();
   if (!clientId) throw new Error("Google OAuth client ID is not configured for this platform.");
+  const body: Record<string, string> = {
+    client_id: clientId,
+    grant_type: "refresh_token",
+    refresh_token: account.refreshToken,
+  };
+  if (clientSecret) body.client_secret = clientSecret;
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: clientId, grant_type: "refresh_token", refresh_token: account.refreshToken }).toString(),
+    body: new URLSearchParams(body).toString(),
   });
-  const result = await response.json();
+  let result: any = {};
+  try { result = await response.json(); } catch { /* keep the HTTP status below */ }
   if (!response.ok || !result.access_token) {
     if (result.error === "invalid_grant") throw new Error("Gmail refresh token was revoked or expired. Reconnect this account.");
+    if (result.error === "invalid_client") {
+      throw new Error(clientSecret
+        ? "Google rejected the OAuth client. Check the client ID and secret in your .env file."
+        : "Google requires a client secret for this OAuth client. Use a Desktop app client ID (PKCE, no secret) or set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_SECRET.");
+    }
     throw new Error(result.error_description || `Google token refresh failed: HTTP ${response.status}`);
   }
-  const updated: GmailAccount = { ...account, accessToken: result.access_token, expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000 };
+  // Google does not return a new refresh token on every refresh. Keep the old one.
+  const updated: GmailAccount = {
+    ...account,
+    accessToken: result.access_token,
+    refreshToken: result.refresh_token || account.refreshToken,
+    expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000,
+  };
   await updateAccount(account.id, updated);
   return updated;
+}
+
+export async function getValidGmailAccount(account: GmailAccount): Promise<GmailAccount> {
+  if (account.expiresAt && account.expiresAt > Date.now() + 60_000) return account;
+  const pending = refreshInFlight.get(account.id);
+  if (pending) return pending;
+  const refresh = refreshGmailAccount(account).finally(() => refreshInFlight.delete(account.id));
+  refreshInFlight.set(account.id, refresh);
+  return refresh;
 }
 
 export async function verifyGmailAccessToken(token: string): Promise<{ ok: boolean; email?: string; error?: string }> {

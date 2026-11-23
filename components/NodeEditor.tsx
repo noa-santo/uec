@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { AliasRule, MatchType, loadAliasRules, saveAliasRules, validateRule, resolveInbox } from "@/lib/alias_rules";
+import { notifySettingsChanged } from "@/lib/settings_events";
 
 const MATCH_TYPES: { type: MatchType; label: string }[] = [
   { type: "exact", label: "Exact" },
@@ -43,18 +44,21 @@ export function NodeEditor() {
     setRules(next);
     setAlias("");
     setInbox("");
+    notifySettingsChanged();
     setStatus("Route saved.");
   };
 
   const remove = async (id: string) => {
     const next = rules.filter((rule) => rule.id !== id);
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (saved.ok) notifySettingsChanged();
     setRules(next);
   };
 
   const toggle = async (id: string) => {
     const next = rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
-    await saveAliasRules(next);
+    const saved = await saveAliasRules(next);
+    if (saved.ok) notifySettingsChanged();
     setRules(next);
   };
 

@@ -44,3 +44,5 @@ requireTs('lib/alias_rules.test.ts');
 requireTs('lib/email_utils.test.ts');
 requireTs('lib/inbox_folders.test.ts');
 requireTs('lib/storage.test.ts');
+requireTs('lib/settings_events.test.ts');
+requireTs('lib/accounts.test.ts');

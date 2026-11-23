@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -30,6 +30,7 @@ import {
 } from "@/lib/alias_rules";
 import { collectUnresolvedAddresses, saveUnresolvedAddresses } from "@/lib/email_utils";
 import { InboxFolder, loadInboxFolders, saveInboxFolders } from "@/lib/inbox_folders";
+import { notifySettingsChanged } from "@/lib/settings_events";
 import "./node-editor.css";
 
 // ── tiny uid ────────────────────────────────────────────────────────────────
@@ -92,10 +93,11 @@ function PatternNode({ data }: NodeProps<Node<PatternData>>) {
   const d = data as PatternData;
   return (
     <div className={`uec-node uec-node-pattern ${d.enabled === false ? "uec-node-disabled" : ""}`}>
-      <Handle type="target" position={Position.Left} id="in" />
+      <Handle type="target" position={Position.Left} id="in"><span className="uec-handle-bubble">in</span></Handle>
       <div className="uec-badge">{d.field} · {d.matchType}</div>
       <div className="uec-node-label">{d.alias || <em style={{ color: "#64748b" }}>any address</em>}</div>
-      <Handle type="source" position={Position.Right} id="out" />
+      <div className="uec-node-hint">out → inbox or AND / OR</div>
+      <Handle type="source" position={Position.Right} id="out"><span className="uec-handle-bubble">out</span></Handle>
     </div>
   );
 }
@@ -104,27 +106,28 @@ function InboxNode({ data }: NodeProps<Node<InboxData>>) {
   const d = data as InboxData;
   return (
     <div className="uec-node uec-node-inbox">
-      <Handle type="target" position={Position.Left} id="in" />
+      <Handle type="target" position={Position.Left} id="in"><span className="uec-handle-bubble">in</span></Handle>
       <div className="uec-badge">{d.outputMode === "static" ? "fixed output" : `title from ${d.outputMode}`}</div>
       <div className="uec-node-label">{d.name || <em style={{ color: "#a3e6cb" }}>unnamed inbox</em>}</div>
-      <Handle type="source" position={Position.Right} id="out" />
+      <div className="uec-node-hint">out → folder (optional)</div>
+      <Handle type="source" position={Position.Right} id="out"><span className="uec-handle-bubble">out</span></Handle>
     </div>
   );
 }
 
 function LogicNode({ data }: NodeProps<Node<LogicData>>) {
   const d = data as LogicData;
-  return <div className="uec-node uec-node-logic"><Handle type="target" position={Position.Left} id="in" /><div className="uec-badge">{d.operator.toUpperCase()}</div><div className="uec-node-label">{d.name || `${d.operator.toUpperCase()} conditions`}</div><Handle type="source" position={Position.Right} id="out" /></div>;
+  return <div className="uec-node uec-node-logic"><Handle type="target" position={Position.Left} id="in"><span className="uec-handle-bubble">in</span></Handle><div className="uec-badge">{d.operator.toUpperCase()}</div><div className="uec-node-label">{d.name || `${d.operator.toUpperCase()} conditions`}</div><div className="uec-node-hint">out → inbox</div><Handle type="source" position={Position.Right} id="out"><span className="uec-handle-bubble">out</span></Handle></div>;
 }
 
 function FolderNode({ data }: NodeProps<Node<FolderData>>) {
   const d = data as FolderData;
   return (
     <div className="uec-node uec-node-folder">
-      <Handle type="target" position={Position.Left} id="in" />
+      <Handle type="target" position={Position.Left} id="in"><span className="uec-handle-bubble">in</span></Handle>
       <div className="uec-badge">{d.includeCatchAll ? "folder · catch-all inboxes" : "folder · configuration"}</div>
       <div className="uec-node-label">{d.name || "Unnamed folder"}</div>
-      <Handle type="source" position={Position.Right} id="out" />
+      <div className="uec-node-hint">groups inboxes in the list</div>
     </div>
   );
 }
@@ -224,6 +227,19 @@ function graphToRules(nodes: Node<NodeData>[], edges: Edge[]): AliasRule[] {
   });
 }
 
+/** Human-readable explanation of which links make sense in this graph. */
+function connectionError(sourceKind: NodeData["kind"], targetKind: NodeData["kind"]): string | null {
+  if (sourceKind === "pattern" || sourceKind === "logic") {
+    if (targetKind === "inbox" || targetKind === "logic") return null;
+    return "A condition must connect to a Virtual inbox or an AND / OR group.";
+  }
+  if (sourceKind === "inbox") {
+    if (targetKind === "folder") return null;
+    return "A Virtual inbox can only connect to a Folder (to group it in the list).";
+  }
+  return "Folders are the end of a chain. Start the connection from a condition or an inbox.";
+}
+
 function graphToFolders(nodes: Node<NodeData>[], edges: Edge[]): InboxFolder[] {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return nodes.filter((node) => node.data.kind === "folder").map((folderNode) => {
@@ -293,6 +309,7 @@ function NodeEditorInner() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [unresolved, setUnresolved] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<PaletteTab>("conditions");
+  const [linkSource, setLinkSource] = useState<string | null>(null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -335,7 +352,11 @@ function NodeEditorInner() {
         setRules(derived);
         rulesRef.current = derived;
         setFolders(derivedFolders);
-        flash(ruleResult.ok && folderResult.ok ? "Saved." : "Storage is full: changes are kept for this session only.");
+        const ok = ruleResult.ok && folderResult.ok;
+        if (ok) notifySettingsChanged();
+        flash(ok
+          ? `Saved ${derived.length} route(s) and ${derivedFolders.length} folder(s).`
+          : `Could not save (${ruleResult.error || folderResult.error || "storage error"}). Changes are only in memory.`);
       }, 400);
     },
     []
@@ -346,31 +367,38 @@ function NodeEditorInner() {
     if (statusTimer.current) clearTimeout(statusTimer.current);
   }, []);
 
-  // ── connect: dragging a handle creates an edge (and thus a rule) ──────────
+  // ── connect: drag a handle, or click a source node then a target node ────
+  const connectNodes = useCallback((sourceId: string | null, targetId: string | null) => {
+    const source = nodesRef.current.find((node) => node.id === sourceId);
+    const target = nodesRef.current.find((node) => node.id === targetId);
+    if (!source || !target || source.id === target.id) return false;
+    const sourceKind = source.data.kind;
+    const targetKind = target.data.kind;
+    const error = connectionError(sourceKind, targetKind);
+    if (error) { flash(error); return false; }
+    const folderLink = sourceKind === "inbox" && targetKind === "folder";
+    pushHistory();
+    const newEdge: Edge = {
+      id: `e_${uid()}`,
+      source: source.id,
+      target: target.id,
+      sourceHandle: "out",
+      targetHandle: "in",
+      animated: true,
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" },
+      style: { stroke: "#3b82f6", strokeWidth: 2 },
+      data: folderLink ? { folderId: target.id.replace(/^f_/, "") } : { ruleId: uid() },
+    };
+    const next = addEdge(newEdge, edgesRef.current);
+    setEdges(next);
+    persist(nodesRef.current, next);
+    flash(folderLink ? "Connected inbox to folder." : "Route connected — don't forget to configure the inbox name.");
+    return true;
+  }, [persist]);
+
   const onConnect: OnConnect = useCallback(
-    (params: Connection) => {
-      const source = nodesRef.current.find((node) => node.id === params.source);
-      const target = nodesRef.current.find((node) => node.id === params.target);
-      if (!source || !target || source.id === target.id) return;
-      const sourceKind = source.data.kind;
-      const targetKind = target.data.kind;
-      const validRoute = ["pattern", "logic"].includes(sourceKind) && ["inbox", "logic"].includes(targetKind);
-      const validFolderLink = sourceKind === "inbox" && targetKind === "folder";
-      if (!validRoute && !validFolderLink) return;
-      pushHistory();
-      const newEdge: Edge = {
-        ...params,
-        id: `e_${uid()}`,
-        animated: sourceKind !== "folder",
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" },
-        style: { stroke: "#3b82f6", strokeWidth: 2 },
-        data: validFolderLink ? { folderId: target.id.replace(/^f_/, "") } : { ruleId: uid() },
-      } as Edge;
-      const next = addEdge(newEdge, edgesRef.current);
-      setEdges(next);
-      persist(nodesRef.current, next);
-    },
-    [persist]
+    (params: Connection) => { connectNodes(params.source ?? null, params.target ?? null); },
+    [connectNodes]
   );
 
   const onEdgesDelete: OnEdgesDelete = useCallback(
@@ -409,6 +437,29 @@ function NodeEditorInner() {
     },
     [onNodesChange, persist]
   );
+
+  useEffect(() => {
+    if (!linkSource) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setLinkSource(null); flash("Link cancelled."); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [linkSource]);
+
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node<NodeData>) => {
+    if (!linkSource) {
+      if (node.data.kind === "folder") {
+        flash("Folders only receive links. Click an inbox first, then the folder.");
+        return;
+      }
+      setLinkSource(node.id);
+      flash("Now click a highlighted target node to connect (Esc cancels).");
+      return;
+    }
+    if (linkSource === node.id) { setLinkSource(null); flash("Link cancelled."); return; }
+    if (connectNodes(linkSource, node.id)) setLinkSource(null);
+  }, [connectNodes, linkSource]);
 
   // ── palette: create a node in the middle of the current viewport ──────────
   const openEdit = (node: Node<NodeData>) => {
@@ -564,7 +615,7 @@ function NodeEditorInner() {
   });
 
   const onNodeDoubleClick = useCallback(
-    (_: React.MouseEvent, node: Node<NodeData>) => openEdit(node),
+    (_: React.MouseEvent, node: Node<NodeData>) => { setLinkSource(null); openEdit(node); },
     [] // openEdit only sets state from the node argument
   );
 
@@ -574,9 +625,20 @@ function NodeEditorInner() {
     setTestResult(resolveInbox(testAddress.trim(), rulesRef.current));
   };
 
+  const displayNodes = useMemo(() => {
+    const source = linkSource ? nodes.find((node) => node.id === linkSource) : undefined;
+    return nodes.map((node) => {
+      if (!source) return node;
+      if (node.id === source.id) return { ...node, className: "uec-link-source" };
+      return { ...node, className: connectionError(source.data.kind, node.data.kind) ? "uec-link-invalid" : "uec-link-target" };
+    });
+  }, [linkSource, nodes]);
+
   if (!loaded) return <div className="uec-editor-loading">Loading routes…</div>;
 
   const editingNode = editingId ? nodes.find((n) => n.id === editingId) : null;
+  const outgoingCount = editingNode ? edges.filter((edge) => edge.source === editingNode.id).length : 0;
+  const incomingCount = editingNode ? edges.filter((edge) => edge.target === editingNode.id).length : 0;
   const modalTitle = editingNode?.data.kind === "pattern" ? "Configure condition"
     : editingNode?.data.kind === "inbox" ? "Configure virtual inbox"
     : editingNode?.data.kind === "folder" ? "Configure folder"
@@ -624,7 +686,14 @@ function NodeEditorInner() {
               </button>
             ))}
           </div>
-          <p className="uec-palette-note">Click a type to place it in the centre of the view and configure it immediately. Double-click any node to edit it again. Drag between handles to connect.</p>
+          <p className="uec-palette-note">Click a type to place it in the centre of the view and configure it immediately. Double-click any node to edit it again.</p>
+          <div className="uec-guide" aria-label="Connection guide">
+            <strong>How to connect</strong>
+            <p>Click a node, then click a highlighted target. Or drag from the <b>out</b> handle to an <b>in</b> handle.</p>
+            <div><span className="uec-guide-chip">Condition</span> → <span className="uec-guide-chip">Virtual inbox</span> creates a route.</div>
+            <div><span className="uec-guide-chip">Condition</span> → <span className="uec-guide-chip">AND / OR</span> → <span className="uec-guide-chip">Inbox</span> combines rules.</div>
+            <div><span className="uec-guide-chip">Virtual inbox</span> → <span className="uec-guide-chip">Folder</span> groups it in the list.</div>
+          </div>
         </aside>
 
         {/* ── canvas and test bar ──────────────────────────────────────── */}
@@ -647,9 +716,16 @@ function NodeEditorInner() {
             <div className="uec-unresolved-list">{unresolved.map((address) => <button type="button" key={address} onClick={() => addExactRouteForAddress(address)} title={`Create exact-match route for ${address}`}>＋ {address} <small>Add exact route</small></button>)}</div>
           </section>}
 
+          {linkSource && (
+            <div className="uec-link-banner" role="status">
+              <span>Linking from <strong>{nodes.find((n) => n.id === linkSource)?.data.kind}</strong> — click a highlighted node to finish.</span>
+              <button type="button" className="uec-btn-cancel" onClick={() => setLinkSource(null)}>Cancel link</button>
+            </div>
+          )}
+
           <div className="uec-editor-canvas" ref={canvasRef}>
             <ReactFlow
-              nodes={nodes}
+              nodes={displayNodes}
               edges={edges}
               nodeTypes={nodeTypes}
               onNodesChange={handleNodesChange}
@@ -658,6 +734,7 @@ function NodeEditorInner() {
               onEdgesDelete={onEdgesDelete}
               onNodesDelete={onNodesDelete}
               onNodeDoubleClick={onNodeDoubleClick}
+              onNodeClick={onNodeClick}
               deleteKeyCode={["Delete", "Backspace"]}
               fitView
               fitViewOptions={{ padding: 0.2 }}
@@ -724,6 +801,12 @@ function NodeEditorInner() {
                 </>
               )}
             </div>
+            {((editingNode.data.kind === "pattern" || editingNode.data.kind === "logic") && outgoingCount === 0) && (
+              <p className="uec-modal-hint uec-modal-warning">This node is not routed yet. After saving, click it and then a highlighted Virtual inbox to create the route.</p>
+            )}
+            {editingNode.data.kind === "inbox" && incomingCount === 0 && (
+              <p className="uec-modal-hint uec-modal-warning">No condition feeds this inbox yet. Connect a condition (or an AND / OR group) to its left side.</p>
+            )}
             <div className="uec-modal-footer">
               <button type="button" className="uec-btn-danger" onClick={removeEditingNode}>Delete node</button>
               <button type="button" className="uec-btn-cancel" onClick={cancelEdit}>Cancel</button>
